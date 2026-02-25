@@ -16,13 +16,20 @@ from rest_framework.views import APIView
 
 from apps.organizations.models import Organization
 
-from .models import GADataSnapshot, Integration, ShopifyDataSnapshot
+from .models import (
+    GADataSnapshot,
+    Integration,
+    ShopifyDataSnapshot,
+    WordPressDataSnapshot,
+)
 from .serializers import (
     GADataSnapshotSerializer,
     IntegrationSerializer,
     SelectPropertySerializer,
     ShopifyConnectSerializer,
     ShopifyDataSnapshotSerializer,
+    WordPressConnectSerializer,
+    WordPressDataSnapshotSerializer,
 )
 
 logger = logging.getLogger("apps")
@@ -704,4 +711,170 @@ class ShopifyDataView(APIView):
             start_shopify_sync(integration.id)
 
         serializer = ShopifyDataSnapshotSerializer(snapshot)
+        return Response(serializer.data)
+
+
+class WordPressConnectView(APIView):
+    """POST /api/integrations/wordpress/connect/"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = WordPressConnectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        org, err = _get_org_or_400(data["email"])
+        if err:
+            return err
+
+        from .services.wordpress import validate_wordpress_connection
+
+        try:
+            wp_info = validate_wordpress_connection(
+                data["site_url"], data["username"], data["app_password"]
+            )
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        integration, _ = Integration.objects.update_or_create(
+            organization=org,
+            provider=Integration.Provider.WORDPRESS,
+            defaults={"is_active": True},
+        )
+        integration.set_access_token(data["app_password"])
+        integration.metadata = {
+            "site_url": wp_info["site_url"],
+            "site_name": wp_info["site_name"],
+            "username": data["username"],
+            "wp_version": wp_info.get("wp_version", ""),
+        }
+        integration.save()
+
+        return Response(
+            {
+                "message": "WordPress connected successfully.",
+                "integration": IntegrationSerializer(integration).data,
+            }
+        )
+
+
+class WordPressDisconnectView(APIView):
+    """DELETE /api/integrations/wordpress/disconnect/?email="""
+    permission_classes = [AllowAny]
+
+    def delete(self, request):
+        email = request.query_params.get("email", "").lower().strip()
+        if not email:
+            return Response(
+                {"error": "Email parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        org, err = _get_org_or_400(email)
+        if err:
+            return err
+
+        try:
+            integration = Integration.objects.get(
+                organization=org,
+                provider=Integration.Provider.WORDPRESS,
+            )
+        except Integration.DoesNotExist:
+            return Response(
+                {"error": "WordPress integration not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        integration.wordpress_snapshots.all().delete()
+        integration.delete()
+
+        return Response({"message": "WordPress disconnected."})
+
+
+class WordPressSyncView(APIView):
+    """POST /api/integrations/wordpress/sync/?email="""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.query_params.get("email", "").lower().strip()
+        if not email:
+            return Response(
+                {"error": "Email parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        org, err = _get_org_or_400(email)
+        if err:
+            return err
+
+        try:
+            integration = Integration.objects.get(
+                organization=org,
+                provider=Integration.Provider.WORDPRESS,
+                is_active=True,
+            )
+        except Integration.DoesNotExist:
+            return Response(
+                {"error": "WordPress not connected."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from .tasks import start_wordpress_sync
+
+        start_wordpress_sync(integration.id)
+        return Response({"message": "Sync started."}, status=status.HTTP_202_ACCEPTED)
+
+
+class WordPressDataView(APIView):
+    """GET /api/integrations/wordpress/data/?email="""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        email = request.query_params.get("email", "").lower().strip()
+        if not email:
+            return Response(
+                {"error": "Email parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        org, err = _get_org_or_400(email)
+        if err:
+            return err
+
+        try:
+            integration = Integration.objects.get(
+                organization=org,
+                provider=Integration.Provider.WORDPRESS,
+                is_active=True,
+            )
+        except Integration.DoesNotExist:
+            return Response(
+                {"error": "WordPress not connected."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        cutoff = timezone.now() - timedelta(days=90)
+        integration.wordpress_snapshots.filter(created_at__lt=cutoff).delete()
+
+        snapshot = integration.wordpress_snapshots.first()
+        if not snapshot:
+            return Response(
+                {"error": "No data available. Trigger a sync first."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        stale_threshold = timezone.now() - timedelta(hours=24)
+        if (
+            snapshot.created_at < stale_threshold
+            and snapshot.sync_status == "complete"
+            and not integration.wordpress_snapshots.filter(sync_status="syncing").exists()
+        ):
+            from .tasks import start_wordpress_sync
+
+            start_wordpress_sync(integration.id)
+
+        serializer = WordPressDataSnapshotSerializer(snapshot)
         return Response(serializer.data)

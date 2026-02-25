@@ -14,6 +14,10 @@ from .views import (
     ShopifyDataView,
     ShopifyDisconnectView,
     ShopifySyncView,
+    WordPressConnectView,
+    WordPressDataView,
+    WordPressDisconnectView,
+    WordPressSyncView,
 )
 
 app_name = "integrations"
@@ -87,6 +91,28 @@ urlpatterns = [
         "shopify/data/",
         ShopifyDataView.as_view(),
         name="shopify-data",
+    ),
+
+    # WordPress
+    path(
+        "wordpress/connect/",
+        WordPressConnectView.as_view(),
+        name="wordpress-connect",
+    ),
+    path(
+        "wordpress/disconnect/",
+        WordPressDisconnectView.as_view(),
+        name="wordpress-disconnect",
+    ),
+    path(
+        "wordpress/sync/",
+        WordPressSyncView.as_view(),
+        name="wordpress-sync",
+    ),
+    path(
+        "wordpress/data/",
+        WordPressDataView.as_view(),
+        name="wordpress-data",
     ),
 
     # Status

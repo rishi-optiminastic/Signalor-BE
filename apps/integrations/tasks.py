@@ -6,7 +6,12 @@ import logging
 import threading
 from datetime import date, timedelta
 
-from .models import GADataSnapshot, Integration, ShopifyDataSnapshot
+from .models import (
+    GADataSnapshot,
+    Integration,
+    ShopifyDataSnapshot,
+    WordPressDataSnapshot,
+)
 
 logger = logging.getLogger("apps")
 
@@ -118,6 +123,62 @@ def _run_shopify_sync(integration_id: int):
 
     except Exception as e:
         logger.error("Shopify sync failed for integration %s: %s", integration_id, str(e))
+        snapshot.sync_status = "failed"
+        snapshot.error_message = str(e)
+        snapshot.save(update_fields=["sync_status", "error_message"])
+
+
+def start_wordpress_sync(integration_id: int):
+    """Spawn a daemon thread to sync WordPress data."""
+    thread = threading.Thread(
+        target=_run_wordpress_sync,
+        args=(integration_id,),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def _run_wordpress_sync(integration_id: int):
+    """Fetch WordPress data and store as a snapshot."""
+    try:
+        integration = Integration.objects.get(pk=integration_id)
+    except Integration.DoesNotExist:
+        logger.error("Integration %s not found for WordPress sync", integration_id)
+        return
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=30)
+
+    snapshot = WordPressDataSnapshot.objects.create(
+        integration=integration,
+        date_start=start_date,
+        date_end=end_date,
+        sync_status="syncing",
+    )
+
+    try:
+        from .services.wordpress import fetch_wordpress_data
+
+        data = fetch_wordpress_data(integration, days=30)
+
+        snapshot.total_posts = data["total_posts"]
+        snapshot.total_pages = data["total_pages"]
+        snapshot.published_posts_30d = data["published_posts_30d"]
+        snapshot.updated_posts_30d = data["updated_posts_30d"]
+        snapshot.top_posts = data["top_posts"]
+        snapshot.daily_publishing = data["daily_publishing"]
+        snapshot.sync_status = "complete"
+        snapshot.save()
+
+        logger.info(
+            "WordPress sync complete for integration %s: %d posts",
+            integration_id,
+            data["total_posts"],
+        )
+
+    except Exception as e:
+        logger.error("WordPress sync failed for integration %s: %s", integration_id, str(e))
         snapshot.sync_status = "failed"
         snapshot.error_message = str(e)
         snapshot.save(update_fields=["sync_status", "error_message"])
