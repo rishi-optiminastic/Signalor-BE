@@ -7,6 +7,10 @@ from .models import (
     Competitor,
     PageScore,
     Recommendation,
+    UserAction,
+    UserGamification,
+    ACHIEVEMENTS_INFO,
+    ACTION_TEMPLATES,
 )
 
 
@@ -105,3 +109,120 @@ class StartAnalysisSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         return value.lower().strip() if value else ""
+
+
+# ============ Gamification Serializers ============
+
+class AchievementSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    icon = serializers.CharField()
+    points = serializers.IntegerField()
+
+
+class UserGamificationSerializer(serializers.ModelSerializer):
+    achievements_detail = serializers.SerializerMethodField()
+    level_name = serializers.CharField(source="get_level_display")
+    level_progress = serializers.FloatField()
+
+    class Meta:
+        model = UserGamification
+        fields = [
+            "user_email",
+            "total_points",
+            "points_this_week",
+            "points_this_month",
+            "level",
+            "level_name",
+            "current_level_points",
+            "points_to_next_level",
+            "level_progress",
+            "current_streak",
+            "longest_streak",
+            "total_actions_completed",
+            "total_actions_verified",
+            "total_score_improvement",
+            "achievements",
+            "achievements_detail",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_achievements_detail(self, obj):
+        return [
+            {**ACHIEVEMENTS_INFO.get(code, {}), "code": code}
+            for code in obj.achievements
+            if code in ACHIEVEMENTS_INFO
+        ]
+
+
+class UserActionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserAction
+        fields = [
+            "id",
+            "action_type",
+            "title",
+            "description",
+            "points_value",
+            "status",
+            "started_at",
+            "completed_at",
+            "verified_at",
+            "score_before",
+            "score_after",
+            "score_improvement",
+            "notes",
+            "created_at",
+            "analysis_run",
+            "recommendation",
+        ]
+        read_only_fields = [
+            "points_value", "started_at", "completed_at", "verified_at",
+            "score_before", "score_after", "score_improvement", "created_at"
+        ]
+
+
+class CreateUserActionSerializer(serializers.Serializer):
+    action_type = serializers.ChoiceField(choices=UserAction.ActionType.choices)
+    title = serializers.CharField(max_length=255)
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    recommendation_id = serializers.IntegerField(required=False)
+    analysis_run_id = serializers.IntegerField(required=False)
+    score_before = serializers.FloatField(required=False)
+
+
+class UpdateUserActionSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=UserAction.ActionStatus.choices,
+        required=False
+    )
+    notes = serializers.CharField(required=False, allow_blank=True)
+    score_after = serializers.FloatField(required=False)
+
+
+class ActionTemplateSerializer(serializers.Serializer):
+    action_type = serializers.CharField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    points = serializers.IntegerField()
+    category = serializers.CharField()
+
+
+# ============ Helper Serializers ============
+
+class ActionStatsSerializer(serializers.Serializer):
+    total_actions = serializers.IntegerField()
+    pending_actions = serializers.IntegerField()
+    in_progress_actions = serializers.IntegerField()
+    completed_actions = serializers.IntegerField()
+    verified_actions = serializers.IntegerField()
+    total_points = serializers.IntegerField()
+    points_this_week = serializers.IntegerField()
+    current_streak = serializers.IntegerField()
+    level = serializers.IntegerField()
+    level_name = serializers.CharField()
+    level_progress = serializers.FloatField()
+    recent_achievements = AchievementSerializer(many=True)
