@@ -89,6 +89,7 @@ class AnalysisRunListView(APIView):
 
 class AnalysisRunDetailView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = []  # frequently loaded by analyzer pages
 
     def get(self, request, run_id):
         try:
@@ -234,6 +235,7 @@ class AchievementsView(APIView):
 class UserActionListView(APIView):
     """List user's actions"""
     permission_classes = [AllowAny]
+    throttle_classes = []  # used by sidebar/actions dashboard refreshes
 
     def get(self, request):
         email = request.query_params.get("email", "").lower().strip()

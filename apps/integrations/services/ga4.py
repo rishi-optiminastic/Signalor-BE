@@ -5,11 +5,15 @@ Uses the GA4 Data API v1beta (BetaAnalyticsDataClient) to pull metrics.
 """
 import logging
 from datetime import date, timedelta
+from urllib.parse import urlparse
 
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import (
     DateRange,
     Dimension,
+    Filter,
+    FilterExpression,
+    FilterExpressionList,
     Metric,
     RunReportRequest,
 )
@@ -191,3 +195,138 @@ def _fetch_daily_trend(client, property_path, date_range) -> list:
             daily[formatted_date]["organic_sessions"] += count
 
     return sorted(daily.values(), key=lambda x: x["date"])
+
+
+def fetch_ga4_page_metrics(integration: Integration, page_url: str, days: int = 30) -> dict:
+    """
+    Fetch GA4 metrics for a specific analyzed page path.
+    Returns a best-effort page match payload with sessions/bounce/avg duration.
+    """
+    if not page_url:
+        return {"found": False, "page_path": "", "sessions": 0, "bounce_rate": 0.0, "avg_session_duration": 0.0}
+
+    property_id = integration.metadata.get("property_id")
+    if not property_id:
+        raise ValueError("No GA4 property selected for this integration.")
+
+    parsed = urlparse(page_url)
+    page_path = parsed.path or "/"
+    analyzed_host = (parsed.hostname or "").lower()
+
+    creds = _build_credentials(integration)
+    creds = _refresh_if_needed(integration, creds)
+    client = BetaAnalyticsDataClient(credentials=creds)
+    property_path = f"properties/{property_id}"
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+    date_range = DateRange(
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+    )
+
+    def _run(path_value: str, host_value: str):
+        response = client.run_report(
+            RunReportRequest(
+                property=property_path,
+                date_ranges=[date_range],
+                dimensions=[Dimension(name="hostName"), Dimension(name="pagePath")],
+                metrics=[
+                    Metric(name="sessions"),
+                    Metric(name="bounceRate"),
+                    Metric(name="averageSessionDuration"),
+                ],
+                dimension_filter=FilterExpression(
+                    and_group=FilterExpressionList(
+                        expressions=[
+                            FilterExpression(
+                                filter=Filter(
+                                    field_name="hostName",
+                                    string_filter=Filter.StringFilter(
+                                        value=host_value,
+                                        match_type=Filter.StringFilter.MatchType.EXACT,
+                                    ),
+                                )
+                            ),
+                            FilterExpression(
+                                filter=Filter(
+                                    field_name="pagePath",
+                                    string_filter=Filter.StringFilter(
+                                        value=path_value,
+                                        match_type=Filter.StringFilter.MatchType.EXACT,
+                                    ),
+                                )
+                            ),
+                        ]
+                    )
+                ),
+                limit=1,
+            )
+        )
+        if not response.rows:
+            return None
+        row = response.rows[0]
+        return {
+            "found": True,
+            "host_match": True,
+            "analyzed_host": host_value,
+            "matched_host": row.dimension_values[0].value,
+            "page_path": row.dimension_values[1].value,
+            "sessions": int(row.metric_values[0].value or 0),
+            "bounce_rate": round(float(row.metric_values[1].value or 0), 4),
+            "avg_session_duration": round(float(row.metric_values[2].value or 0), 2),
+        }
+
+    host_variants = [analyzed_host] if analyzed_host else []
+    if analyzed_host.startswith("www."):
+        host_variants.append(analyzed_host.removeprefix("www."))
+    elif analyzed_host:
+        host_variants.append(f"www.{analyzed_host}")
+
+    path_variants = [page_path]
+    alt_path = page_path[:-1] if page_path.endswith("/") and page_path != "/" else f"{page_path}/"
+    if alt_path != page_path:
+        path_variants.append(alt_path)
+
+    match = None
+    for hv in host_variants:
+        for pv in path_variants:
+            match = _run(pv, hv)
+            if match:
+                return match
+
+    # If host+path exact doesn't match, check if analyzed host exists in property at all.
+    host_seen = False
+    for hv in host_variants:
+        host_response = client.run_report(
+            RunReportRequest(
+                property=property_path,
+                date_ranges=[date_range],
+                dimensions=[Dimension(name="hostName")],
+                metrics=[Metric(name="sessions")],
+                dimension_filter=FilterExpression(
+                    filter=Filter(
+                        field_name="hostName",
+                        string_filter=Filter.StringFilter(
+                            value=hv,
+                            match_type=Filter.StringFilter.MatchType.EXACT,
+                        ),
+                    )
+                ),
+                limit=1,
+            )
+        )
+        if host_response.rows:
+            host_seen = True
+            break
+
+    return {
+        "found": False,
+        "host_match": host_seen,
+        "analyzed_host": analyzed_host,
+        "matched_host": "",
+        "page_path": page_path,
+        "sessions": 0,
+        "bounce_rate": 0.0,
+        "avg_session_duration": 0.0,
+    }

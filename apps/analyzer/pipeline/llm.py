@@ -67,6 +67,15 @@ def _sanitize(text: str) -> str:
     return text.replace("\x00", "").encode("utf-8", errors="replace").decode("utf-8")
 
 
+def _log_preview(text: str, limit: int = 200) -> str:
+    """
+    Build a console-safe preview string.
+    Uses ASCII with backslash escapes so Windows cp1252 logging never crashes.
+    """
+    compact = _sanitize(text[:limit]).replace("\n", " ").replace("\r", " ")
+    return compact.encode("ascii", errors="backslashreplace").decode("ascii")
+
+
 def _log_call(model: str, purpose: str, prompt: str, response: str, status: str, duration_ms: int):
     """Record an LLM call to the shared log (thread-safe)."""
     with _log_lock:
@@ -171,7 +180,7 @@ def _call_openrouter(
         "temperature": temperature,
     }
 
-    prompt_preview = _sanitize(prompt[:120]).replace('\n', ' ')
+    prompt_preview = _log_preview(prompt, 120)
     logger.info("[LLM REQUEST] >> %s | %s | prompt: \"%s...\"", model, purpose, prompt_preview)
 
     t0 = time.time()
@@ -187,7 +196,7 @@ def _call_openrouter(
         if resp.status_code == 200:
             data = resp.json()
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            response_preview = content[:200].replace('\n', ' ')
+            response_preview = _log_preview(content, 200)
             logger.info("[LLM RESPONSE] << %s | %dms | %d chars | \"%s...\"", model, duration_ms, len(content), response_preview)
             _log_call(model, purpose, prompt, content.strip(), "success", duration_ms)
             return content.strip()
@@ -251,7 +260,7 @@ def _call_gemini_direct(prompt: str, purpose: str = "") -> str:
     if not google_key:
         return ""
 
-    prompt_preview = prompt[:120].replace('\n', ' ')
+    prompt_preview = _log_preview(prompt, 120)
     logger.info("[LLM REQUEST] >> gemini-direct | %s | prompt: \"%s...\"", purpose, prompt_preview)
 
     t0 = time.time()
@@ -263,7 +272,7 @@ def _call_gemini_direct(prompt: str, purpose: str = "") -> str:
         response = model.generate_content(prompt)
         text = response.text.strip()
         duration_ms = int((time.time() - t0) * 1000)
-        response_preview = text[:200].replace('\n', ' ')
+        response_preview = _log_preview(text, 200)
         logger.info("[LLM RESPONSE] << gemini-direct | %dms | %d chars | \"%s...\"", duration_ms, len(text), response_preview)
         _log_call("gemini-direct", purpose, prompt, text, "success", duration_ms)
         return text

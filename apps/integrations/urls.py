@@ -10,6 +10,9 @@ from .views import (
     GASyncView,
     IntegrationStatusView,
     ScoreTrafficCorrelationView,
+    ShopifyAppUninstalledWebhookView,
+    ShopifyAuthURLView,
+    ShopifyCallbackView,
     ShopifyConnectView,
     ShopifyDataView,
     ShopifyDisconnectView,
@@ -72,6 +75,21 @@ urlpatterns = [
     ),
 
     # Shopify
+    path(
+        "shopify/auth-url/",
+        ShopifyAuthURLView.as_view(),
+        name="shopify-auth-url",
+    ),
+    path(
+        "shopify/callback/",
+        ShopifyCallbackView.as_view(),
+        name="shopify-callback",
+    ),
+    path(
+        "shopify/webhooks/app-uninstalled/",
+        ShopifyAppUninstalledWebhookView.as_view(),
+        name="shopify-app-uninstalled-webhook",
+    ),
     path(
         "shopify/connect/",
         ShopifyConnectView.as_view(),

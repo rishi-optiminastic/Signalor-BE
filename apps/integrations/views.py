@@ -3,9 +3,12 @@ import hmac
 import json
 import logging
 import os
+import secrets
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.core.cache import cache
+from django.http import HttpResponseRedirect
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google.analytics.admin import AnalyticsAdminServiceClient
@@ -224,6 +227,7 @@ class GACallbackView(APIView):
 class IntegrationStatusView(APIView):
     """GET /api/integrations/status/?email="""
     permission_classes = [AllowAny]
+    throttle_classes = []  # high-frequency read for dashboard/sidebar state
 
     def get(self, request):
         email = request.query_params.get("email", "").lower().strip()
@@ -476,7 +480,24 @@ class GADataView(APIView):
             start_ga4_sync(integration.id)
 
         serializer = GADataSnapshotSerializer(snapshot)
-        return Response(serializer.data)
+        payload = serializer.data
+
+        analyzed_url = request.query_params.get("analyzed_url", "").strip()
+        if analyzed_url:
+            try:
+                from .services.ga4 import fetch_ga4_page_metrics
+                payload["page_match"] = fetch_ga4_page_metrics(integration, analyzed_url)
+            except Exception as exc:
+                logger.warning("Failed GA page match lookup: %s", exc)
+                payload["page_match"] = {
+                    "found": False,
+                    "page_path": "",
+                    "sessions": 0,
+                    "bounce_rate": 0.0,
+                    "avg_session_duration": 0.0,
+                }
+
+        return Response(payload)
 
 
 # ---------- Score vs Traffic Correlation ----------
@@ -589,6 +610,185 @@ class ShopifyConnectView(APIView):
             "message": "Shopify connected successfully.",
             "integration": IntegrationSerializer(integration).data,
         })
+
+
+class ShopifyAuthURLView(APIView):
+    """GET /api/integrations/shopify/auth-url/?email=&shop=&return_to="""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        email = request.query_params.get("email", "").lower().strip()
+        shop = request.query_params.get("shop", "").strip()
+        return_to = request.query_params.get("return_to", "").strip() or "/settings/integrations"
+
+        if not email or not shop:
+            return Response(
+                {"error": "Both email and shop parameters are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        org, err = _get_org_or_400(email)
+        if err:
+            return err
+
+        from .services.shopify import build_shopify_oauth_url, normalize_shop_domain
+
+        shop_domain = normalize_shop_domain(shop)
+        nonce = secrets.token_urlsafe(24)
+        payload = {
+            "org_id": org.id,
+            "email": email,
+            "shop_domain": shop_domain,
+            "nonce": nonce,
+            "return_to": return_to,
+        }
+        cache.set(f"shopify_oauth_state:{nonce}", payload, timeout=15 * 60)
+        state = _sign_state(payload)
+
+        client_id = os.getenv("SHOPIFY_CLIENT_ID", "").strip()
+        redirect_uri = os.getenv("SHOPIFY_REDIRECT_URI", "").strip()
+        scopes = os.getenv("SHOPIFY_SCOPES", "read_products,read_orders,read_customers")
+
+        if not client_id or not redirect_uri:
+            return Response(
+                {"error": "Shopify OAuth env is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        auth_url = build_shopify_oauth_url(
+            shop_domain=shop_domain,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            state=state,
+            scopes=[s.strip() for s in scopes.split(",") if s.strip()],
+        )
+        return Response({"auth_url": auth_url})
+
+
+class ShopifyCallbackView(APIView):
+    """GET /api/integrations/shopify/callback/"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from .services.shopify import (
+            exchange_shopify_oauth_code,
+            normalize_shop_domain,
+            register_app_uninstalled_webhook,
+            validate_shopify_connection,
+            verify_shopify_oauth_hmac,
+        )
+
+        query_string = request.META.get("QUERY_STRING", "")
+        shop = request.query_params.get("shop", "").strip()
+        code = request.query_params.get("code", "").strip()
+        state_str = request.query_params.get("state", "").strip()
+
+        frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+        default_return_to = "/settings/integrations"
+
+        def _redirect_with_status(ok: bool, reason: str = "", return_to: str = default_return_to):
+            target = return_to if return_to.startswith("/") and not return_to.startswith("//") else default_return_to
+            sep = "&" if "?" in target else "?"
+            status_q = "connected" if ok else "error"
+            url = f"{frontend_base}{target}{sep}{urlencode({'shopify': status_q, 'reason': reason})}"
+            return HttpResponseRedirect(url)
+
+        if not shop or not code or not state_str:
+            return _redirect_with_status(False, "missing_params")
+
+        payload = _verify_state(state_str)
+        if not payload:
+            return _redirect_with_status(False, "invalid_state")
+
+        return_to = payload.get("return_to", default_return_to)
+        nonce = payload.get("nonce", "")
+        cached_payload = cache.get(f"shopify_oauth_state:{nonce}") if nonce else None
+        if not nonce or not cached_payload:
+            return _redirect_with_status(False, "expired_state", return_to=return_to)
+        cache.delete(f"shopify_oauth_state:{nonce}")
+
+        client_secret = os.getenv("SHOPIFY_CLIENT_SECRET", "").strip()
+        client_id = os.getenv("SHOPIFY_CLIENT_ID", "").strip()
+        if not client_id or not client_secret:
+            return _redirect_with_status(False, "oauth_not_configured", return_to=return_to)
+
+        if not verify_shopify_oauth_hmac(query_string, client_secret):
+            return _redirect_with_status(False, "invalid_hmac", return_to=return_to)
+
+        shop_domain = normalize_shop_domain(shop)
+        if cached_payload.get("shop_domain") != shop_domain:
+            return _redirect_with_status(False, "shop_mismatch", return_to=return_to)
+
+        org_id = payload.get("org_id")
+        try:
+            org = Organization.objects.get(pk=org_id)
+        except Organization.DoesNotExist:
+            return _redirect_with_status(False, "org_not_found", return_to=return_to)
+
+        try:
+            tokens = exchange_shopify_oauth_code(
+                shop_domain=shop_domain,
+                client_id=client_id,
+                client_secret=client_secret,
+                code=code,
+            )
+            access_token = tokens.get("access_token", "")
+            if not access_token:
+                return _redirect_with_status(False, "missing_access_token", return_to=return_to)
+
+            shop_info = validate_shopify_connection(shop_domain, access_token)
+
+            integration, _ = Integration.objects.update_or_create(
+                organization=org,
+                provider=Integration.Provider.SHOPIFY,
+                defaults={"is_active": True},
+            )
+            integration.set_access_token(access_token)
+            integration.metadata = {
+                "shop_domain": shop_domain,
+                "shop_name": shop_info.get("name", shop_domain),
+                "scope": tokens.get("scope", ""),
+            }
+            integration.save()
+
+            webhook_url = os.getenv("SHOPIFY_APP_UNINSTALLED_WEBHOOK_URL", "").strip()
+            if webhook_url:
+                register_app_uninstalled_webhook(shop_domain, access_token, webhook_url)
+
+        except Exception as exc:
+            logger.error("Shopify callback failed: %s", exc)
+            return _redirect_with_status(False, "callback_failed", return_to=return_to)
+
+        return _redirect_with_status(True, return_to=return_to)
+
+
+class ShopifyAppUninstalledWebhookView(APIView):
+    """POST /api/integrations/shopify/webhooks/app-uninstalled/"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .services.shopify import normalize_shop_domain, verify_shopify_webhook_hmac
+
+        secret = os.getenv("SHOPIFY_CLIENT_SECRET", "").strip()
+        hmac_header = request.headers.get("X-Shopify-Hmac-Sha256", "")
+        shop_header = request.headers.get("X-Shopify-Shop-Domain", "")
+        if not secret or not hmac_header or not shop_header:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        if not verify_shopify_webhook_hmac(request.body, hmac_header, secret):
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
+
+        shop_domain = normalize_shop_domain(shop_header)
+        integration = Integration.objects.filter(
+            provider=Integration.Provider.SHOPIFY,
+            metadata__shop_domain=shop_domain,
+        ).first()
+
+        if integration:
+            integration.shopify_snapshots.all().delete()
+            integration.delete()
+
+        return Response({"message": "Processed."}, status=status.HTTP_200_OK)
 
 
 class ShopifyDisconnectView(APIView):

@@ -52,6 +52,15 @@ def _discover_competitors_llm(brand_name: str, site_context: str) -> list[dict]:
     return []
 
 
+def _clean_site_context(text: str) -> str:
+    """Keep context readable for LLM and safe for logs."""
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    # Drop control chars and keep standard printable range.
+    compact = re.sub(r"[^\x20-\x7E]", " ", compact)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    return compact[:800]
+
+
 def _validate_url(url: str) -> bool:
     """Validate a URL is reachable."""
     try:
@@ -85,6 +94,7 @@ def discover_competitors(crawl: CrawlResult) -> list[dict]:
             crawl.text[:300],
         ])
     )
+    site_context = _clean_site_context(site_context)
 
     competitors = _discover_competitors_llm(brand_name, site_context)
 

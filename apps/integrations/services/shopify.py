@@ -1,17 +1,112 @@
-"""
-Shopify REST Admin API integration service.
-Uses Custom App access tokens (no OAuth flow needed).
-"""
+"""Shopify REST Admin API integration service (OAuth + data sync)."""
 import logging
-from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
+import hashlib
+import hmac
+from urllib.parse import parse_qsl, urlencode
 
 import requests
 
 logger = logging.getLogger("apps")
 
 API_VERSION = "2024-01"
+AUTH_SCOPES = ["read_products", "read_orders", "read_customers"]
+
+
+def normalize_shop_domain(shop_domain: str) -> str:
+    domain = shop_domain.strip().lower()
+    domain = domain.replace("https://", "").replace("http://", "")
+    domain = domain.rstrip("/")
+    if not domain.endswith(".myshopify.com"):
+        domain = domain.split(".")[0] + ".myshopify.com"
+    return domain
+
+
+def build_shopify_oauth_url(
+    shop_domain: str,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    scopes: list[str] | None = None,
+) -> str:
+    domain = normalize_shop_domain(shop_domain)
+    scope_str = ",".join(scopes or AUTH_SCOPES)
+    query = urlencode(
+        {
+            "client_id": client_id,
+            "scope": scope_str,
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+    )
+    return f"https://{domain}/admin/oauth/authorize?{query}"
+
+
+def verify_shopify_oauth_hmac(raw_query_string: str, shared_secret: str) -> bool:
+    pairs = parse_qsl(raw_query_string, keep_blank_values=True)
+    signed = [(k, v) for k, v in pairs if k not in {"hmac", "signature"}]
+    given = next((v for k, v in pairs if k == "hmac"), "")
+    if not given:
+        return False
+
+    message = "&".join(f"{k}={v}" for k, v in sorted(signed, key=lambda x: x[0]))
+    digest = hmac.new(
+        shared_secret.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(digest, given)
+
+
+def exchange_shopify_oauth_code(
+    shop_domain: str,
+    client_id: str,
+    client_secret: str,
+    code: str,
+) -> dict:
+    domain = normalize_shop_domain(shop_domain)
+    url = f"https://{domain}/admin/oauth/access_token"
+    resp = requests.post(
+        url,
+        json={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+        },
+        timeout=20,
+    )
+    if resp.status_code != 200:
+        raise ValueError(f"Failed token exchange (HTTP {resp.status_code}).")
+    return resp.json()
+
+
+def register_app_uninstalled_webhook(
+    shop_domain: str,
+    access_token: str,
+    callback_url: str,
+) -> None:
+    domain = normalize_shop_domain(shop_domain)
+    url = f"https://{domain}/admin/api/{API_VERSION}/webhooks.json"
+    headers = {"X-Shopify-Access-Token": access_token}
+    payload = {
+        "webhook": {
+            "topic": "app/uninstalled",
+            "address": callback_url,
+            "format": "json",
+        }
+    }
+    resp = requests.post(url, json=payload, headers=headers, timeout=20)
+    if resp.status_code not in (200, 201, 422):
+        logger.warning("Failed to register app/uninstalled webhook: HTTP %s", resp.status_code)
+
+
+def verify_shopify_webhook_hmac(body: bytes, hmac_header: str, shared_secret: str) -> bool:
+    import base64
+
+    digest = hmac.new(shared_secret.encode("utf-8"), body, hashlib.sha256).digest()
+    computed = base64.b64encode(digest).decode("utf-8")
+    return hmac.compare_digest(computed, hmac_header or "")
 
 
 def validate_shopify_connection(shop_domain: str, access_token: str) -> dict:
@@ -19,7 +114,8 @@ def validate_shopify_connection(shop_domain: str, access_token: str) -> dict:
 
     Returns shop info dict on success, raises ValueError on failure.
     """
-    url = f"https://{shop_domain}/admin/api/{API_VERSION}/shop.json"
+    normalized_domain = normalize_shop_domain(shop_domain)
+    url = f"https://{normalized_domain}/admin/api/{API_VERSION}/shop.json"
     headers = {"X-Shopify-Access-Token": access_token}
 
     try:
@@ -42,8 +138,6 @@ def fetch_shopify_data(integration, days: int = 30) -> dict:
 
     Returns a dict ready to populate a ShopifyDataSnapshot.
     """
-    from ..models import decrypt_token
-
     shop_domain = integration.metadata.get("shop_domain", "")
     access_token = integration.get_access_token()
 
