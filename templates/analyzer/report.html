@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>GEO Analysis Report — {{ run.url }}</title>
+    <style>
+        body {
+            font-family: Helvetica, Arial, sans-serif;
+            color: #1a1a2e;
+            margin: 40px;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        h1 { color: #6c5ce7; font-size: 24px; margin-bottom: 5px; }
+        h2 { color: #2d3436; font-size: 18px; border-bottom: 2px solid #6c5ce7; padding-bottom: 5px; margin-top: 30px; }
+        h3 { color: #636e72; font-size: 14px; margin-top: 20px; }
+        .subtitle { color: #636e72; font-size: 14px; margin-bottom: 30px; }
+        .score-big {
+            font-size: 48px;
+            font-weight: bold;
+            color: #6c5ce7;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .score-label { text-align: center; color: #636e72; font-size: 14px; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #dfe6e9; }
+        th { background: #f8f9fa; font-weight: 600; color: #2d3436; }
+        .pillar-row td:last-child { font-weight: bold; text-align: right; }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .badge-critical { background: #ff7675; color: white; }
+        .badge-high { background: #fdcb6e; color: #2d3436; }
+        .badge-medium { background: #74b9ff; color: white; }
+        .badge-low { background: #b2bec3; color: white; }
+        .rec-card {
+            border: 1px solid #dfe6e9;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 8px 0;
+        }
+        .rec-title { font-weight: bold; margin-bottom: 4px; }
+        .rec-action { color: #2d3436; margin-top: 6px; font-style: italic; }
+        .footer {
+            margin-top: 40px;
+            padding-top: 15px;
+            border-top: 1px solid #dfe6e9;
+            color: #636e72;
+            font-size: 10px;
+            text-align: center;
+        }
+        .probe-result { margin: 5px 0; padding: 5px; background: #f8f9fa; border-radius: 4px; }
+        .mentioned { color: #00b894; font-weight: bold; }
+        .not-mentioned { color: #d63031; }
+    </style>
+</head>
+<body>
+    <h1>GEO Analysis Report</h1>
+    <p class="subtitle">{{ run.url }} — Generated {{ run.updated_at|date:"F j, Y" }}</p>
+
+    {% if run.composite_score is not None %}
+    <div class="score-big">{{ run.composite_score|floatformat:1 }}</div>
+    <p class="score-label">Overall GEO Score (out of 100)</p>
+    {% endif %}
+
+    {% if main_page %}
+    <h2>Pillar Breakdown</h2>
+    <table>
+        <tr><th>Pillar</th><th style="text-align:right">Score</th></tr>
+        <tr class="pillar-row"><td>Content Structure</td><td>{{ main_page.content_score|floatformat:1 }}</td></tr>
+        <tr class="pillar-row"><td>Schema Markup</td><td>{{ main_page.schema_score|floatformat:1 }}</td></tr>
+        <tr class="pillar-row"><td>E-E-A-T Signals</td><td>{{ main_page.eeat_score|floatformat:1 }}</td></tr>
+        <tr class="pillar-row"><td>Technical GEO</td><td>{{ main_page.technical_score|floatformat:1 }}</td></tr>
+        <tr class="pillar-row"><td>Entity Authority</td><td>{{ main_page.entity_score|floatformat:1 }}</td></tr>
+        <tr class="pillar-row"><td>AI Visibility</td><td>{{ main_page.ai_visibility_score|floatformat:1 }}</td></tr>
+    </table>
+    {% endif %}
+
+    {% if recommendations %}
+    <h2>Recommendations</h2>
+    {% for rec in recommendations %}
+    <div class="rec-card">
+        <div>
+            <span class="badge badge-{{ rec.priority }}">{{ rec.priority }}</span>
+            <span class="rec-title">{{ rec.title }}</span>
+        </div>
+        <p>{{ rec.description }}</p>
+        <p class="rec-action">Fix: {{ rec.action }}</p>
+        {% if rec.impact_estimate %}
+        <p><small>{{ rec.impact_estimate }}</small></p>
+        {% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if competitors %}
+    <h2>Competitor Comparison</h2>
+    <table>
+        <tr><th>Competitor</th><th>URL</th><th style="text-align:right">Score</th></tr>
+        {% for comp in competitors %}
+        <tr>
+            <td>{{ comp.name }}</td>
+            <td>{{ comp.url }}</td>
+            <td style="text-align:right; font-weight:bold">{{ comp.composite_score|floatformat:1|default:"—" }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    {% endif %}
+
+    {% if ai_probes %}
+    <h2>AI Visibility Probes</h2>
+    {% for probe in ai_probes %}
+    <div class="probe-result">
+        <strong>{{ probe.prompt_used }}</strong><br>
+        {% if probe.brand_mentioned %}
+        <span class="mentioned">Brand mentioned</span>
+        {% else %}
+        <span class="not-mentioned">Brand not mentioned</span>
+        {% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    <div class="footer">
+        <p>Generated by GEO Analyzer — Optiminastic</p>
+    </div>
+</body>
+</html>

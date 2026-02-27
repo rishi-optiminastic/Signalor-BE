@@ -1,7 +1,12 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Load .env from project root
+load_dotenv(BASE_DIR / '.env')
 
 LOGS_DIR = BASE_DIR / 'logs'
 LOGS_DIR.mkdir(exist_ok=True)
@@ -18,6 +23,10 @@ INSTALLED_APPS = [
     'corsheaders',
     
    'apps.accounts.apps.AccountsConfig',
+    'apps.organizations.apps.OrganizationsConfig',
+    'apps.analyzer.apps.AnalyzerConfig',
+    'apps.integrations.apps.IntegrationsConfig',
+    'apps.visibility.apps.VisibilityConfig',
     'core',
 ]
 
@@ -169,13 +178,18 @@ LOGGING = {
 
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_ANALYTICS_REDIRECT_URI = os.getenv(
+    'GOOGLE_ANALYTICS_REDIRECT_URI',
+    'http://localhost:3000/settings/integrations/callback/google-analytics',
+)
+ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '')
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_HOST_USER = os.getenv('SMTP_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('SMTP_PASS', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@example.com')
 
 SESSION_COOKIE_HTTPONLY = True

@@ -1,0 +1,228 @@
+from rest_framework import serializers
+
+from .models import (
+    AIVisibilityProbe,
+    AnalysisRun,
+    BrandVisibility,
+    Competitor,
+    PageScore,
+    Recommendation,
+    UserAction,
+    UserGamification,
+    ACHIEVEMENTS_INFO,
+    ACTION_TEMPLATES,
+)
+
+
+class RecommendationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Recommendation
+        fields = [
+            "id", "pillar", "priority", "title", "description",
+            "action", "impact_estimate", "category",
+        ]
+
+
+class AIVisibilityProbeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AIVisibilityProbe
+        fields = [
+            "id", "prompt_used", "llm_response", "brand_mentioned", "confidence",
+        ]
+
+
+class PageScoreSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PageScore
+        fields = [
+            "id", "url", "content_score", "content_details",
+            "schema_score", "schema_details", "eeat_score", "eeat_details",
+            "technical_score", "technical_details", "entity_score", "entity_details",
+            "ai_visibility_score", "ai_visibility_details", "composite_score",
+        ]
+
+
+class BrandVisibilitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BrandVisibility
+        fields = [
+            "google_score", "google_details",
+            "reddit_score", "reddit_details",
+            "medium_score", "medium_details",
+            "web_mentions_score", "web_mentions_details",
+            "overall_score",
+        ]
+
+
+class CompetitorSerializer(serializers.ModelSerializer):
+    page_score = PageScoreSerializer(read_only=True)
+
+    class Meta:
+        model = Competitor
+        fields = [
+            "id", "name", "url", "industry", "composite_score", "scored", "page_score",
+        ]
+
+
+class AnalysisRunListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AnalysisRun
+        fields = [
+            "id", "url", "run_type", "status", "progress",
+            "composite_score", "created_at",
+        ]
+
+
+class AnalysisRunDetailSerializer(serializers.ModelSerializer):
+    page_scores = PageScoreSerializer(many=True, read_only=True)
+    competitors = CompetitorSerializer(many=True, read_only=True)
+    recommendations = RecommendationSerializer(many=True, read_only=True)
+    ai_probes = AIVisibilityProbeSerializer(many=True, read_only=True)
+    brand_visibility = BrandVisibilitySerializer(read_only=True)
+
+    class Meta:
+        model = AnalysisRun
+        fields = [
+            "id", "url", "brand_name", "email", "run_type", "status", "progress",
+            "composite_score", "error_message", "created_at", "updated_at",
+            "page_scores", "competitors", "recommendations", "ai_probes",
+            "brand_visibility", "llm_logs",
+        ]
+
+
+class StartAnalysisSerializer(serializers.Serializer):
+    url = serializers.URLField(max_length=2048)
+    run_type = serializers.ChoiceField(
+        choices=AnalysisRun.RunType.choices,
+        default=AnalysisRun.RunType.SINGLE_PAGE,
+    )
+    email = serializers.EmailField(required=False, allow_blank=True, default="")
+    brand_name = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+
+    def validate_url(self, value):
+        value = value.strip()
+        if not value.startswith(("http://", "https://")):
+            value = f"https://{value}"
+        return value
+
+    def validate_email(self, value):
+        return value.lower().strip() if value else ""
+
+
+# ============ Gamification Serializers ============
+
+class AchievementSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    icon = serializers.CharField()
+    points = serializers.IntegerField()
+
+
+class UserGamificationSerializer(serializers.ModelSerializer):
+    achievements_detail = serializers.SerializerMethodField()
+    level_name = serializers.CharField(source="get_level_display")
+    level_progress = serializers.FloatField()
+
+    class Meta:
+        model = UserGamification
+        fields = [
+            "user_email",
+            "total_points",
+            "points_this_week",
+            "points_this_month",
+            "level",
+            "level_name",
+            "current_level_points",
+            "points_to_next_level",
+            "level_progress",
+            "current_streak",
+            "longest_streak",
+            "total_actions_completed",
+            "total_actions_verified",
+            "total_score_improvement",
+            "achievements",
+            "achievements_detail",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_achievements_detail(self, obj):
+        return [
+            {**ACHIEVEMENTS_INFO.get(code, {}), "code": code}
+            for code in obj.achievements
+            if code in ACHIEVEMENTS_INFO
+        ]
+
+
+class UserActionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserAction
+        fields = [
+            "id",
+            "action_type",
+            "title",
+            "description",
+            "points_value",
+            "status",
+            "started_at",
+            "completed_at",
+            "verified_at",
+            "score_before",
+            "score_after",
+            "score_improvement",
+            "notes",
+            "created_at",
+            "analysis_run",
+            "recommendation",
+        ]
+        read_only_fields = [
+            "points_value", "started_at", "completed_at", "verified_at",
+            "score_before", "score_after", "score_improvement", "created_at"
+        ]
+
+
+class CreateUserActionSerializer(serializers.Serializer):
+    action_type = serializers.ChoiceField(choices=UserAction.ActionType.choices)
+    title = serializers.CharField(max_length=255)
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    recommendation_id = serializers.IntegerField(required=False)
+    analysis_run_id = serializers.IntegerField(required=False)
+    score_before = serializers.FloatField(required=False)
+
+
+class UpdateUserActionSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=UserAction.ActionStatus.choices,
+        required=False
+    )
+    notes = serializers.CharField(required=False, allow_blank=True)
+    score_after = serializers.FloatField(required=False)
+
+
+class ActionTemplateSerializer(serializers.Serializer):
+    action_type = serializers.CharField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    points = serializers.IntegerField()
+    category = serializers.CharField()
+
+
+# ============ Helper Serializers ============
+
+class ActionStatsSerializer(serializers.Serializer):
+    total_actions = serializers.IntegerField()
+    pending_actions = serializers.IntegerField()
+    in_progress_actions = serializers.IntegerField()
+    completed_actions = serializers.IntegerField()
+    verified_actions = serializers.IntegerField()
+    total_points = serializers.IntegerField()
+    points_this_week = serializers.IntegerField()
+    current_streak = serializers.IntegerField()
+    level = serializers.IntegerField()
+    level_name = serializers.CharField()
+    level_progress = serializers.FloatField()
+    recent_achievements = AchievementSerializer(many=True)
