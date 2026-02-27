@@ -6,7 +6,7 @@ DEBUG = True
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dev-key-change-in-production')
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0','https://rankking-be.onrender.com/']
 
 # Database — Neon PostgreSQL
 DATABASE_URL = os.getenv('DATABASE_URL', '')
