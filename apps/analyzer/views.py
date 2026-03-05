@@ -377,7 +377,11 @@ def _to_html_from_markdownish(text: str) -> str:
     chunks = [chunk.strip() for chunk in (text or "").split("\n\n") if chunk.strip()]
     if not chunks:
         return "<p></p>"
-    return "".join(f"<p>{chunk.replace('\n', '<br/>')}</p>" for chunk in chunks)
+    html_chunks = []
+    for chunk in chunks:
+        chunk_html = chunk.replace('\n', '<br/>')
+        html_chunks.append(f"<p>{chunk_html}</p>")
+    return "".join(html_chunks)
 
 
 def _get_or_create_blog_config(
