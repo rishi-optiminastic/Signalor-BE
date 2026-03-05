@@ -156,7 +156,6 @@ GLOBAL_KEYWORDS = {
     "serving customers in", "operating in", "offices in",
 }
 
-
 def _detect_country_from_signals(crawl: CrawlResult) -> tuple[str | None, bool]:
     """
     Detect the brand's country and whether it has global presence.
@@ -558,6 +557,7 @@ def _discover_competitors_llm(
     site_context: str,
     detected_country: str | None = None,
     is_global: bool = False,
+    is_marketplace: bool = False,
     market_profile: dict | None = None,
     user_country: str | None = None,
 ) -> list[dict]:
@@ -627,6 +627,17 @@ def _discover_competitors_llm(
             if allow_marketplaces
             else ""
         )
+        model_line = (
+            "Brand model: Marketplace / multi-brand platform."
+            if is_marketplace
+            else "Brand model: Single-brand or standard ecommerce/service business."
+        )
+        marketplace_rules = (
+            "- Since this is a marketplace, return competing marketplaces/platforms where buyers can compare multiple brands.\n"
+            "- Exclude individual merchant brands, vendor storefronts, and sellers listed on the platform."
+            if is_marketplace
+            else ""
+        )
         country_source_line = (
             f"User-selected target country from frontend: {user_country}. Treat this as a hard constraint."
             if user_country
@@ -636,6 +647,7 @@ def _discover_competitors_llm(
             f"You are a senior competitive intelligence analyst.\n\n"
             f"Find exactly 5 DIRECT competitors for '{brand_name}'.\n\n"
             f"Brand profile:\n{understanding_block}\n\n"
+            f"{model_line}\n"
             f"{country_source_line}\n"
             f"Market profiler:\n{_market_profile_prompt_block(market_profile)}\n"
             f"Additional site signals:\n{compact_context}\n\n"
@@ -648,6 +660,7 @@ def _discover_competitors_llm(
             f"5. Similar revenue scale — within 1-2 bands of the brand ({brand_revenue or 'unknown'})\n"
             f"6. Active company with a real, working homepage URL\n\n"
             f"{local_leader_preference}\n"
+            f"{marketplace_rules}\n"
             f"STRICTLY EXCLUDE:\n"
             f"- The brand itself or its parent/subsidiaries\n"
             f"- {_geography_exclusion(primary_country, is_global)}\n"
@@ -920,15 +933,21 @@ def discover_competitors(crawl: CrawlResult, user_country: str | None = None) ->
 
     # Build multi-page market profile BEFORE asking the LLM.
     market_profile = build_brand_market_profile(crawl, max_pages=8)
+    model_details = market_profile.get("model_details") or {}
+    is_marketplace = (
+        market_profile.get("model_type") == "marketplace"
+        or int(model_details.get("product_brand_count") or 0) >= 8
+    )
     normalized_user_country = _normalize_country_name(user_country) or (str(user_country or "").strip() or None)
     detected_country = normalized_user_country or market_profile.get("top_market")
     is_global = False if normalized_user_country else (market_profile.get("model_type") == "global_dropshipping")
     logger.info(
-        "Market profiler for %s: top_market=%s conf=%s model=%s top_scores=%s addresses=%s",
+        "Market profiler for %s: top_market=%s conf=%s model=%s marketplace=%s top_scores=%s addresses=%s",
         brand_name,
         market_profile.get("top_market"),
         market_profile.get("top_market_confidence"),
         market_profile.get("model_type"),
+        is_marketplace,
         market_profile.get("country_scores", [])[:3],
         (market_profile.get("signals", {}) or {}).get("addresses", [])[:3],
     )
@@ -968,6 +987,7 @@ def discover_competitors(crawl: CrawlResult, user_country: str | None = None) ->
         site_context,
         detected_country,
         is_global,
+        is_marketplace=is_marketplace,
         market_profile=market_profile,
         user_country=normalized_user_country,
     )

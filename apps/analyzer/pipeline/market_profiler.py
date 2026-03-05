@@ -172,6 +172,35 @@ PAYMENT_METHOD_HINTS = (
     "cod",
 )
 
+MARKETPLACE_STRONG_HINTS = (
+    "sell on",
+    "become a seller",
+    "become a vendor",
+    "seller dashboard",
+    "vendor dashboard",
+    "merchant dashboard",
+    "marketplace",
+    "independent sellers",
+    "third-party sellers",
+)
+
+MARKETPLACE_SOFT_HINTS = (
+    "shop by brand",
+    "all brands",
+    "multiple brands",
+    "multi brand",
+    "our sellers",
+    "seller portal",
+    "vendor portal",
+)
+
+SINGLE_BRAND_HINTS = (
+    "official store",
+    "our brand story",
+    "about our brand",
+    "we design and manufacture",
+)
+
 GLOBAL_SHIPPING_HINTS = (
     "ships worldwide",
     "worldwide shipping",
@@ -291,6 +320,25 @@ def _extract_address_countries_from_jsonld(html: str) -> list[str]:
             if "addressCountry" in node and node.get("addressCountry"):
                 markets.append(str(node["addressCountry"]).strip())
     return markets
+
+
+def _extract_product_brands_from_jsonld(html: str) -> list[str]:
+    brands: list[str] = []
+    for obj in _extract_json_ld_objects(html):
+        for node in _walk_objects(obj):
+            if not isinstance(node, dict):
+                continue
+            node_type = str(node.get("@type", "")).lower()
+            if "product" not in node_type:
+                continue
+            brand = node.get("brand")
+            if isinstance(brand, dict):
+                name = str(brand.get("name", "")).strip()
+            else:
+                name = str(brand or "").strip()
+            if len(name) >= 3:
+                brands.append(name)
+    return brands
 
 
 def _extract_address_snippets(text: str) -> list[str]:
@@ -464,6 +512,48 @@ def _classify_business_model(aggregate_text: str, ships_worldwide: bool, market_
     return "local_d2c"
 
 
+def _classify_business_model_v2(
+    aggregate_text: str,
+    ships_worldwide: bool,
+    market_count: int,
+    product_brand_count: int,
+) -> tuple[str, dict]:
+    t = (aggregate_text or "").lower()
+
+    strong_hits = sum(1 for h in MARKETPLACE_STRONG_HINTS if h in t)
+    soft_hits = sum(1 for h in MARKETPLACE_SOFT_HINTS if h in t)
+    single_brand_hits = sum(1 for h in SINGLE_BRAND_HINTS if h in t)
+
+    marketplace_score = (
+        (3.0 if strong_hits > 0 else 0.0)
+        + min(2.0, soft_hits * 0.5)
+        + (2.0 if product_brand_count >= 6 else 0.0)
+        - min(2.0, single_brand_hits * 0.5)
+    )
+
+    if marketplace_score >= 3.0:
+        return "marketplace", {
+            "marketplace_score": round(marketplace_score, 2),
+            "strong_hits": strong_hits,
+            "soft_hits": soft_hits,
+            "single_brand_hits": single_brand_hits,
+            "product_brand_count": product_brand_count,
+        }
+
+    model_type = _classify_business_model(
+        aggregate_text,
+        ships_worldwide=ships_worldwide,
+        market_count=market_count,
+    )
+    return model_type, {
+        "marketplace_score": round(marketplace_score, 2),
+        "strong_hits": strong_hits,
+        "soft_hits": soft_hits,
+        "single_brand_hits": single_brand_hits,
+        "product_brand_count": product_brand_count,
+    }
+
+
 def build_brand_market_profile(seed_crawl: CrawlResult, max_pages: int = 8) -> dict:
     """
     Build a lightweight market profile from multi-page crawling and hard signals.
@@ -504,6 +594,7 @@ def build_brand_market_profile(seed_crawl: CrawlResult, max_pages: int = 8) -> d
 
     scores: dict[str, float] = {}
     all_text_chunks: list[str] = []
+    product_brands: set[str] = set()
 
     def add_score(market: str | None, weight: float):
         normalized = _normalize_market_label(market)
@@ -540,6 +631,11 @@ def build_brand_market_profile(seed_crawl: CrawlResult, max_pages: int = 8) -> d
                 signals["addresses"].append(normalized)
             add_score(country, 6.0)
 
+        for brand in _extract_product_brands_from_jsonld(c.html or ""):
+            key = re.sub(r"\s+", " ", brand).strip().lower()
+            if key:
+                product_brands.add(key)
+
         for snippet in _extract_address_snippets(signal_text[:16000]):
             if snippet not in signals["address_snippets"]:
                 signals["address_snippets"].append(snippet)
@@ -575,10 +671,11 @@ def build_brand_market_profile(seed_crawl: CrawlResult, max_pages: int = 8) -> d
     top_market_confidence = country_scores[0]["probability"] if country_scores else 0.0
 
     aggregate_text = " ".join(all_text_chunks)
-    model_type = _classify_business_model(
+    model_type, model_details = _classify_business_model_v2(
         aggregate_text,
         ships_worldwide=bool(signals["shipping"]["ships_worldwide"]),
         market_count=len(country_scores),
+        product_brand_count=len(product_brands),
     )
 
     profile = {
@@ -586,6 +683,7 @@ def build_brand_market_profile(seed_crawl: CrawlResult, max_pages: int = 8) -> d
         "top_market_confidence": round(top_market_confidence, 4),
         "country_scores": country_scores,
         "model_type": model_type,
+        "model_details": model_details,
         "signals": signals,
     }
     logger.info(
