@@ -21,6 +21,7 @@ from .views import (
     WordPressDataView,
     WordPressDisconnectView,
     WordPressSyncView,
+    WordPressCallbackView
 )
 
 app_name = "integrations"
@@ -43,7 +44,6 @@ urlpatterns = [
         name="ga-disconnect",
     ),
 
-    # Property selection
     path(
         "google-analytics/properties/",
         GAPropertiesListView.as_view(),
@@ -110,12 +110,15 @@ urlpatterns = [
         ShopifyDataView.as_view(),
         name="shopify-data",
     ),
-
-    # WordPress
     path(
         "wordpress/connect/",
         WordPressConnectView.as_view(),
         name="wordpress-connect",
+    ),
+    path(
+        "wordpress/callback/",
+        WordPressCallbackView.as_view(),
+        name="wordpress-callback",
     ),
     path(
         "wordpress/disconnect/",
@@ -132,7 +135,5 @@ urlpatterns = [
         WordPressDataView.as_view(),
         name="wordpress-data",
     ),
-
-    # Status
     path("status/", IntegrationStatusView.as_view(), name="status"),
 ]
