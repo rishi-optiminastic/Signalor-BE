@@ -1,6 +1,6 @@
 """
 WordPress REST API integration service.
-Uses WordPress username + Application Password (Basic Auth).
+Supports both self-hosted WordPress (Basic Auth) and WordPress.com (OAuth2 via public API).
 """
 from __future__ import annotations
 
@@ -20,6 +20,14 @@ def _auth_header(username: str, app_password: str) -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
+def _wpcom_auth_header(access_token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+def _is_wpcom(integration) -> bool:
+    return bool(integration.metadata.get("is_wpcom", False))
+
+
 def _normalize_site_url(site_url: str) -> str:
     url = site_url.strip().rstrip("/")
     if not url.startswith(("http://", "https://")):
@@ -31,7 +39,6 @@ def _parse_wp_datetime(value: str) -> datetime | None:
     if not value:
         return None
     try:
-        # WP often returns "YYYY-MM-DDTHH:MM:SS" without timezone
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -40,8 +47,64 @@ def _parse_wp_datetime(value: str) -> datetime | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# WordPress.com OAuth2 + public API
+# ---------------------------------------------------------------------------
+
+WPCOM_TOKEN_URL = "https://public-api.wordpress.com/oauth2/token"
+WPCOM_API_BASE = "https://public-api.wordpress.com/rest/v1.1"
+
+
+def exchange_wpcom_oauth_code(client_id: str, client_secret: str, redirect_uri: str, code: str) -> dict:
+    """Exchange WordPress.com OAuth2 code for access token."""
+    resp = requests.post(
+        WPCOM_TOKEN_URL,
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "code": code,
+            "grant_type": "authorization_code",
+        },
+        timeout=20,
+    )
+    if resp.status_code != 200:
+        raise ValueError(f"WordPress.com token exchange failed (HTTP {resp.status_code}): {resp.text[:300]}")
+    return resp.json()
+
+
+def validate_wpcom_token(access_token: str, blog_id: str) -> dict:
+    """Validate WordPress.com access token and get site info."""
+    headers = _wpcom_auth_header(access_token)
+
+    # Get site info
+    site_url = f"{WPCOM_API_BASE}/sites/{blog_id}"
+    resp = requests.get(site_url, headers=headers, timeout=15)
+
+    if resp.status_code != 200:
+        raise ValueError(f"WordPress.com site validation failed (HTTP {resp.status_code})")
+
+    site_data = resp.json()
+
+    # Get user info
+    me_url = f"{WPCOM_API_BASE}/me"
+    me_resp = requests.get(me_url, headers=headers, timeout=15)
+    me_data = me_resp.json() if me_resp.status_code == 200 else {}
+
+    return {
+        "name": site_data.get("name", ""),
+        "url": site_data.get("URL", ""),
+        "username": me_data.get("username", ""),
+        "user_id": me_data.get("ID"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Self-hosted validation
+# ---------------------------------------------------------------------------
+
 def validate_wordpress_connection(site_url: str, username: str, app_password: str) -> dict:
-    """Validate connectivity and credentials.
+    """Validate connectivity and credentials for self-hosted WordPress.
 
     Returns normalized site metadata on success. Raises ValueError on failure.
     """
@@ -83,8 +146,18 @@ def validate_wordpress_connection(site_url: str, username: str, app_password: st
     }
 
 
+# ---------------------------------------------------------------------------
+# Data fetching (dual-path)
+# ---------------------------------------------------------------------------
+
 def fetch_wordpress_data(integration, days: int = 30) -> dict:
     """Fetch WordPress content metrics and trend data for snapshot storage."""
+    if _is_wpcom(integration):
+        return _fetch_wpcom_data(integration, days)
+    return _fetch_selfhosted_data(integration, days)
+
+
+def _fetch_selfhosted_data(integration, days: int) -> dict:
     site_url = _normalize_site_url(integration.metadata.get("site_url", ""))
     username = integration.metadata.get("username", "")
     app_password = integration.get_access_token()
@@ -135,6 +208,95 @@ def fetch_wordpress_data(integration, days: int = 30) -> dict:
     }
 
 
+def _fetch_wpcom_data(integration, days: int) -> dict:
+    access_token = integration.get_access_token()
+    headers = _wpcom_auth_header(access_token)
+    blog_id = integration.metadata.get("blog_id", "")
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+
+    posts_url = f"{WPCOM_API_BASE}/sites/{blog_id}/posts"
+    all_posts = []
+    page_handle = None
+    for _ in range(10):
+        params = {
+            "number": 100,
+            "status": "publish",
+            "order_by": "date",
+            "order": "DESC",
+            "fields": "ID,title,slug,URL,date,modified",
+        }
+        if page_handle:
+            params["page_handle"] = page_handle
+        try:
+            resp = requests.get(posts_url, headers=headers, params=params, timeout=30)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            posts = data.get("posts", [])
+            if not posts:
+                break
+            all_posts.extend(posts)
+            meta = data.get("meta", {})
+            next_page = meta.get("next_page")
+            if not next_page:
+                break
+            page_handle = next_page
+        except requests.RequestException:
+            break
+
+    total_posts = len(all_posts)
+
+    pages_url = f"{WPCOM_API_BASE}/sites/{blog_id}/pages"
+    try:
+        pages_resp = requests.get(pages_url, headers=headers, params={"number": 1, "status": "publish"}, timeout=15)
+        total_pages = pages_resp.json().get("found", 0) if pages_resp.status_code == 200 else 0
+    except requests.RequestException:
+        total_pages = 0
+
+    start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    published_posts_30d = 0
+    updated_posts_30d = 0
+
+    for post in all_posts:
+        pub_dt = _parse_wp_datetime(post.get("date", ""))
+        mod_dt = _parse_wp_datetime(post.get("modified", ""))
+        if pub_dt and pub_dt >= start_dt:
+            published_posts_30d += 1
+        if mod_dt and mod_dt >= start_dt:
+            updated_posts_30d += 1
+
+    top_posts = []
+    for post in all_posts[:10]:
+        top_posts.append(
+            {
+                "id": post.get("ID"),
+                "title": post.get("title", ""),
+                "slug": post.get("slug", ""),
+                "url": post.get("URL", ""),
+                "published_at": post.get("date"),
+                "modified_at": post.get("modified"),
+            }
+        )
+
+    wpcom_posts_for_daily = [
+        {"date_gmt": post.get("date", ""), "date": post.get("date", "")}
+        for post in all_posts
+    ]
+    daily_publishing = _compute_daily_publishing(wpcom_posts_for_daily, start_date, end_date)
+
+    return {
+        "date_start": start_date,
+        "date_end": end_date,
+        "total_posts": total_posts,
+        "total_pages": total_pages,
+        "published_posts_30d": published_posts_30d,
+        "updated_posts_30d": updated_posts_30d,
+        "top_posts": top_posts,
+        "daily_publishing": daily_publishing,
+    }
+
 def _get_collection_total(site_url: str, collection: str, headers: dict[str, str]) -> int:
     url = urljoin(site_url + "/", f"wp-json/wp/v2/{collection}")
     resp = requests.get(
@@ -150,13 +312,12 @@ def _get_collection_total(site_url: str, collection: str, headers: dict[str, str
 
 
 def _fetch_recent_posts(site_url: str, headers: dict[str, str], orderby: str) -> list[dict]:
-    """Fetch recent published posts ordered by a field until entries are old."""
     url = urljoin(site_url + "/", "wp-json/wp/v2/posts")
     results: list[dict] = []
     page = 1
     per_page = 100
 
-    while page <= 10:  # cap requests for safety
+    while page <= 10:
         resp = requests.get(
             url,
             headers=headers,
@@ -206,6 +367,10 @@ def _compute_daily_publishing(posts: list[dict], start_date: date, end_date: dat
     return sorted(daily.values(), key=lambda row: row["date"])
 
 
+# ---------------------------------------------------------------------------
+# Publishing (dual-path)
+# ---------------------------------------------------------------------------
+
 def publish_wordpress_post(
     integration,
     title: str,
@@ -214,10 +379,13 @@ def publish_wordpress_post(
     status: str = "draft",
     slug: str = "",
 ) -> dict:
-    """
-    Publish or save a draft post to WordPress.
-    Returns a compact post payload for UI confirmation.
-    """
+    """Publish or save a draft post to WordPress (self-hosted or .com)."""
+    if _is_wpcom(integration):
+        return _publish_wpcom_post(integration, title, content, excerpt, status, slug)
+    return _publish_selfhosted_post(integration, title, content, excerpt, status, slug)
+
+
+def _publish_selfhosted_post(integration, title, content, excerpt, status, slug) -> dict:
     site_url = _normalize_site_url(integration.metadata.get("site_url", ""))
     username = integration.metadata.get("username", "")
     app_password = integration.get_access_token()
@@ -251,4 +419,40 @@ def publish_wordpress_post(
         "url": data.get("link"),
         "status": data.get("status"),
         "title": (data.get("title") or {}).get("rendered", title),
+    }
+
+
+def _publish_wpcom_post(integration, title, content, excerpt, status, slug) -> dict:
+    access_token = integration.get_access_token()
+    headers = _wpcom_auth_header(access_token)
+    headers["Content-Type"] = "application/json"
+    blog_id = integration.metadata.get("blog_id", "")
+
+    post_url = f"{WPCOM_API_BASE}/sites/{blog_id}/posts/new"
+    wp_status = "publish" if status == "publish" else "draft"
+    payload = {
+        "title": title.strip(),
+        "content": content.strip(),
+        "excerpt": excerpt.strip(),
+        "status": wp_status,
+    }
+    if slug.strip():
+        payload["slug"] = slug.strip()
+
+    try:
+        resp = requests.post(post_url, headers=headers, json=payload, timeout=25)
+    except requests.RequestException as exc:
+        raise ValueError(f"Failed to reach WordPress.com publish API: {exc}") from exc
+
+    if resp.status_code not in (200, 201):
+        raise ValueError(
+            f"WordPress.com publish failed (HTTP {resp.status_code}): {resp.text[:200]}"
+        )
+
+    data = resp.json()
+    return {
+        "id": data.get("ID"),
+        "url": data.get("URL"),
+        "status": data.get("status"),
+        "title": data.get("title", title),
     }
