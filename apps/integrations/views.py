@@ -94,6 +94,21 @@ def _verify_state(state_str: str) -> dict | None:
     return None
 
 
+def _redirect_with_status(
+    ok: bool,
+    reason: str = "",
+    return_to: str = "/settings/integrations",
+    provider: str = "wordpress",
+):
+    """Build a redirect to the frontend with a status query param."""
+    frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+    target = return_to if return_to.startswith("/") and not return_to.startswith("//") else "/settings/integrations"
+    sep = "&" if "?" in target else "?"
+    status_q = "connected" if ok else "error"
+    url = f"{frontend_base}{target}{sep}{urlencode({provider: status_q, 'reason': reason})}"
+    return HttpResponseRedirect(url)
+
+
 def _build_credentials(integration: Integration) -> Credentials:
     """Build google.oauth2.credentials.Credentials from an Integration."""
     return Credentials(
@@ -107,17 +122,9 @@ def _build_credentials(integration: Integration) -> Credentials:
 
 
 def _refresh_if_needed(integration: Integration, creds: Credentials) -> Credentials:
-    """Refresh credentials if expired, persist new tokens.
-
-    Google access tokens live ~1 hour.  The Credentials object built from
-    stored tokens has no ``expiry``, so ``creds.expired`` is always False.
-    We therefore *always* attempt a refresh when a refresh_token is present
-    and catch the "already valid" case silently.
-    """
     if not creds.refresh_token:
         return creds
 
-    # If expiry is unknown (None) or the token is expired, force refresh
     needs_refresh = creds.expiry is None or creds.expired
     if needs_refresh:
         try:
@@ -717,7 +724,7 @@ class ShopifyCallbackView(APIView):
         frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
         default_return_to = "/settings/integrations"
 
-        def _redirect_with_status(ok: bool, reason: str = "", return_to: str = default_return_to):
+        def _shopify_redirect(ok: bool, reason: str = "", return_to: str = default_return_to):
             target = return_to if return_to.startswith("/") and not return_to.startswith("//") else default_return_to
             sep = "&" if "?" in target else "?"
             status_q = "connected" if ok else "error"
@@ -725,11 +732,11 @@ class ShopifyCallbackView(APIView):
             return HttpResponseRedirect(url)
 
         if not shop or not code or not state_str:
-            return _redirect_with_status(False, "missing_params")
+            return _shopify_redirect(False, "missing_params")
 
         payload = _verify_state(state_str)
         if not payload:
-            return _redirect_with_status(False, "invalid_state")
+            return _shopify_redirect(False, "invalid_state")
 
         frontend_base = (payload.get("frontend_base") or frontend_base).rstrip("/")
 
@@ -737,26 +744,26 @@ class ShopifyCallbackView(APIView):
         nonce = payload.get("nonce", "")
         cached_payload = cache.get(f"shopify_oauth_state:{nonce}") if nonce else None
         if not nonce or not cached_payload:
-            return _redirect_with_status(False, "expired_state", return_to=return_to)
+            return _shopify_redirect(False, "expired_state", return_to=return_to)
         cache.delete(f"shopify_oauth_state:{nonce}")
 
         client_secret = os.getenv("SHOPIFY_CLIENT_SECRET", "").strip()
         client_id = os.getenv("SHOPIFY_CLIENT_ID", "").strip()
         if not client_id or not client_secret:
-            return _redirect_with_status(False, "oauth_not_configured", return_to=return_to)
+            return _shopify_redirect(False, "oauth_not_configured", return_to=return_to)
 
         if not verify_shopify_oauth_hmac(query_string, client_secret):
-            return _redirect_with_status(False, "invalid_hmac", return_to=return_to)
+            return _shopify_redirect(False, "invalid_hmac", return_to=return_to)
 
         shop_domain = normalize_shop_domain(shop)
         if cached_payload.get("shop_domain") != shop_domain:
-            return _redirect_with_status(False, "shop_mismatch", return_to=return_to)
+            return _shopify_redirect(False, "shop_mismatch", return_to=return_to)
 
         org_id = payload.get("org_id")
         try:
             org = Organization.objects.get(pk=org_id)
         except Organization.DoesNotExist:
-            return _redirect_with_status(False, "org_not_found", return_to=return_to)
+            return _shopify_redirect(False, "org_not_found", return_to=return_to)
 
         try:
             tokens = exchange_shopify_oauth_code(
@@ -767,7 +774,7 @@ class ShopifyCallbackView(APIView):
             )
             access_token = tokens.get("access_token", "")
             if not access_token:
-                return _redirect_with_status(False, "missing_access_token", return_to=return_to)
+                return _shopify_redirect(False, "missing_access_token", return_to=return_to)
 
             shop_info = validate_shopify_connection(shop_domain, access_token)
 
@@ -790,9 +797,9 @@ class ShopifyCallbackView(APIView):
 
         except Exception as exc:
             logger.error("Shopify callback failed: %s", exc)
-            return _redirect_with_status(False, "callback_failed", return_to=return_to)
+            return _shopify_redirect(False, "callback_failed", return_to=return_to)
 
-        return _redirect_with_status(True, return_to=return_to)
+        return _shopify_redirect(True, return_to=return_to)
 
 
 class ShopifyAppUninstalledWebhookView(APIView):
@@ -950,6 +957,7 @@ class ShopifyDataView(APIView):
             and not integration.shopify_snapshots.filter(sync_status="syncing").exists()
         ):
             from .tasks import start_shopify_sync
+
             start_shopify_sync(integration.id)
 
         serializer = ShopifyDataSnapshotSerializer(snapshot)
@@ -978,6 +986,51 @@ class WordPressConnectView(APIView):
         if err:
             return err
 
+        site_url = data["site_url"]
+
+        if ".wordpress.com" in site_url or ".wp.com" in site_url:
+            client_id = os.getenv("WORDPRESS_COM_CLIENT_ID", "")
+            redirect_uri = os.getenv("WORDPRESS_COM_REDIRECT_URI", "http://localhost:8000/api/integrations/wordpress/callback/")
+
+            if not client_id:
+                return Response(
+                    {"error": "WordPress.com OAuth is not configured."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            state = secrets.token_urlsafe(32)
+            referer = request.META.get("HTTP_REFERER", "")
+            return_to = request.data.get("return_to", "")
+            if not return_to and referer:
+                from urllib.parse import urlparse
+                parsed = urlparse(referer)
+                return_to = parsed.path or "/settings/integrations"
+            if not return_to:
+                return_to = "/settings/integrations"
+
+            cache.set(
+                f"wordpress_oauth_state:{state}",
+                {
+                    "email": data["email"],
+                    "return_to": return_to,
+                },
+                timeout=600,  # 10 minutes
+            )
+
+            auth_params = {
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "response_type": "code",
+                "state": state,
+                "blog": site_url.rstrip("/"),
+            }
+            auth_url = f"https://public-api.wordpress.com/oauth2/authorize?{urlencode(auth_params)}"
+
+            return Response({
+                "oauth_url": auth_url,
+                "message": "Redirect user to complete WordPress.com OAuth",
+            })
+
+        # Self-hosted WordPress with Application Password
         if is_wpcom:
             client_id = os.getenv("WPCOM_CLIENT_ID", "").strip()
             client_secret = os.getenv("WPCOM_CLIENT_SECRET", "").strip()
@@ -1029,6 +1082,7 @@ class WordPressConnectView(APIView):
             "site_name": wp_info["site_name"],
             "username": data.get("username", ""),
             "wp_version": wp_info.get("wp_version", ""),
+            "is_wpcom": False,
         }
         integration.save()
 
@@ -1204,6 +1258,79 @@ class WordPressSyncView(APIView):
 
         start_wordpress_sync(integration.id)
         return Response({"message": "Sync started."}, status=status.HTTP_202_ACCEPTED)
+
+
+class WordPressCallbackView(APIView):
+    """GET /api/integrations/wordpress/callback/"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        code = request.query_params.get("code")
+        state = request.query_params.get("state")
+
+        default_return_to = "/settings/integrations"
+
+        if not code:
+            logger.error("WordPress OAuth callback missing code")
+            return _redirect_with_status(False, "missing_code", return_to=default_return_to, provider="wordpress")
+
+        # Retrieve state data from cache
+        state_data = cache.get(f"wordpress_oauth_state:{state}") if state else None
+        if not state_data:
+            logger.error("WordPress OAuth state not found or expired")
+            return _redirect_with_status(False, "state_expired", return_to=default_return_to, provider="wordpress")
+
+        email = state_data.get("email")
+        return_to = state_data.get("return_to") or default_return_to
+
+        try:
+            org = Organization.objects.get(owner_email=email)
+        except Organization.DoesNotExist:
+            logger.error("Org not found for email: %s", email)
+            return _redirect_with_status(False, "org_not_found", return_to=return_to, provider="wordpress")
+
+        # Exchange code for access token
+        from .services.wordpress import exchange_wpcom_oauth_code, validate_wpcom_token
+
+        client_id = os.getenv("WORDPRESS_COM_CLIENT_ID", "")
+        client_secret = os.getenv("WORDPRESS_COM_CLIENT_SECRET", "")
+        redirect_uri = os.getenv("WORDPRESS_COM_REDIRECT_URI", "http://localhost:8000/api/integrations/wordpress/callback/")
+
+        try:
+            token_data = exchange_wpcom_oauth_code(client_id, client_secret, redirect_uri, code)
+            access_token = token_data.get("access_token")
+            blog_id = str(token_data.get("blog_id", ""))
+            blog_url = token_data.get("blog_url", "")
+
+            if not access_token:
+                return _redirect_with_status(False, "missing_token", return_to=return_to, provider="wordpress")
+
+            # Validate the token and get site info
+            site_info = validate_wpcom_token(access_token, blog_id)
+
+            integration, _ = Integration.objects.update_or_create(
+                organization=org,
+                provider=Integration.Provider.WORDPRESS,
+                defaults={"is_active": True},
+            )
+            integration.set_access_token(access_token)
+            integration.metadata = {
+                "site_url": blog_url,
+                "site_name": site_info.get("name", blog_url),
+                "username": site_info.get("username", email),
+                "blog_id": blog_id,
+                "is_wpcom": True,
+            }
+            integration.save()
+
+            cache.delete(f"wordpress_oauth_state:{state}")
+            logger.info("WordPress.com connected for org: %s", org.id)
+
+        except Exception as exc:
+            logger.error("WordPress.com callback failed: %s", exc)
+            return _redirect_with_status(False, "callback_failed", return_to=return_to, provider="wordpress")
+
+        return _redirect_with_status(True, return_to=return_to, provider="wordpress")
 
 
 class WordPressDataView(APIView):
