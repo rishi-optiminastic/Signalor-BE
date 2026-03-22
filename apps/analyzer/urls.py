@@ -32,6 +32,10 @@ from .views import (
     CitationTrendView,
     RecheckPromptView,
     RecheckAllPromptsView,
+    # New features
+    ScoreHistoryView,
+    ScheduledAnalysisView,
+    AutoFixView,
 )
 
 app_name = "analyzer"
@@ -39,6 +43,8 @@ app_name = "analyzer"
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health-check"),
     path("analyze/", StartAnalysisView.as_view(), name="start-analysis"),
+    path("runs/history/", ScoreHistoryView.as_view(), name="run-history"),
+    path("schedule/", ScheduledAnalysisView.as_view(), name="schedule"),
     path("runs/", AnalysisRunListView.as_view(), name="run-list"),
     path("runs/<int:run_id>/", AnalysisRunDetailView.as_view(), name="run-detail"),
     path("runs/s/<str:slug>/prompts/",                          PromptListCreateView.as_view(),   name="prompt-list-create"),
@@ -48,6 +54,7 @@ urlpatterns = [
     path("runs/s/<str:slug>/citation-trend/",                  CitationTrendView.as_view(),      name="citation-trend"),
     path("runs/s/<str:slug>/competitors/", CompetitorListCreateView.as_view(), name="competitor-list-create"),
     path("runs/s/<str:slug>/competitors/<int:competitor_id>/", CompetitorDetailView.as_view(), name="competitor-detail"),
+    path("runs/s/<str:slug>/auto-fix/", AutoFixView.as_view(), name="auto-fix"),
     path("runs/s/<str:slug>/", AnalysisRunBySlugView.as_view(), name="run-by-slug"),
     path("runs/<int:run_id>/status/", AnalysisRunStatusView.as_view(), name="run-status"),
     path("runs/<int:run_id>/export-pdf/", ExportPDFView.as_view(), name="export-pdf"),

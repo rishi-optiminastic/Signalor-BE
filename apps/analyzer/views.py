@@ -1867,3 +1867,156 @@ class CompetitorDetailView(APIView):
         competitor = get_object_or_404(Competitor, pk=competitor_id, analysis_run=run)
         competitor.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ── Score History ──────────────────────────────────────────────────────────
+
+class ScoreHistoryView(APIView):
+    """GET /api/analyzer/runs/history/?email=&org_id="""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        org_id = request.query_params.get("org_id")
+        email = request.query_params.get("email", "").lower().strip()
+
+        if org_id:
+            qs = AnalysisRun.objects.filter(organization_id=org_id, status="complete")
+        elif email:
+            qs = AnalysisRun.objects.filter(email=email, status="complete")
+        else:
+            return Response(
+                {"error": "Either email or org_id parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = list(
+            qs.order_by("created_at")
+            .values("created_at", "composite_score", "slug")
+        )
+        result = [
+            {
+                "date": row["created_at"].isoformat(),
+                "composite_score": round(row["composite_score"] or 0, 1),
+                "slug": row["slug"],
+            }
+            for row in data
+        ]
+        return Response(result)
+
+
+# ── Scheduled Re-analysis ─────────────────────────────────────────────────
+
+class ScheduledAnalysisView(APIView):
+    """GET/POST /api/analyzer/schedule/"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        email = request.query_params.get("email", "").lower().strip()
+        org_id = request.query_params.get("org_id")
+        if not email or not org_id:
+            return Response({"error": "email and org_id required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import ScheduledAnalysis
+        try:
+            schedule = ScheduledAnalysis.objects.get(organization_id=org_id, email=email)
+            from .serializers import ScheduledAnalysisSerializer
+            return Response(ScheduledAnalysisSerializer(schedule).data)
+        except ScheduledAnalysis.DoesNotExist:
+            return Response(None, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        email = request.data.get("email", "").lower().strip()
+        org_id = request.data.get("org_id")
+        url = request.data.get("url", "").strip()
+        brand_name = request.data.get("brand_name", "").strip()
+        frequency = request.data.get("frequency", "weekly")
+        is_active = request.data.get("is_active", True)
+
+        if not email or not org_id or not url:
+            return Response({"error": "email, org_id, and url required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            org = Organization.objects.get(pk=org_id)
+        except Organization.DoesNotExist:
+            return Response({"error": "Organization not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        from .models import ScheduledAnalysis
+        delta = timedelta(days=7) if frequency == "weekly" else timedelta(days=30)
+
+        schedule, created = ScheduledAnalysis.objects.update_or_create(
+            organization=org,
+            email=email,
+            defaults={
+                "url": url,
+                "brand_name": brand_name,
+                "frequency": frequency,
+                "is_active": is_active,
+                "next_run_at": timezone.now() + delta,
+            },
+        )
+        from .serializers import ScheduledAnalysisSerializer
+        return Response(ScheduledAnalysisSerializer(schedule).data, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
+
+
+# ── Auto-Fix ──────────────────────────────────────────────────────────────
+
+class AutoFixView(APIView):
+    """GET/POST /api/analyzer/runs/s/<slug>/auto-fix/"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        """Return fix status for all recommendations in this run."""
+        from django.shortcuts import get_object_or_404
+        from .models import AutoFixJob
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        jobs = AutoFixJob.objects.filter(analysis_run=run).order_by("-created_at")
+
+        # Deduplicate: keep the latest job per recommendation
+        seen = {}
+        for job in jobs:
+            if job.recommendation_id not in seen:
+                seen[job.recommendation_id] = {
+                    "recommendation_id": job.recommendation_id,
+                    "status": job.status,
+                    "message": job.response_data.get("message", job.error_message or ""),
+                    "fix_type": job.fix_type,
+                }
+
+        return Response(list(seen.values()))
+
+    def post(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .auto_fix import apply_fixes
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        recommendation_ids = request.data.get("recommendation_ids", [])
+        email = request.data.get("email", "").lower().strip()
+        org_id = request.data.get("org_id")
+
+        if not recommendation_ids or not email:
+            return Response({"error": "recommendation_ids and email are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Find the integration (WordPress or Shopify) for this org
+        org = run.organization
+        if not org:
+            return Response({"error": "No organization linked to this run."}, status=status.HTTP_400_BAD_REQUEST)
+
+        integration = Integration.objects.filter(
+            organization=org,
+            is_active=True,
+            provider__in=["wordpress", "shopify"],
+        ).first()
+
+        if not integration:
+            return Response(
+                {"error": "No WordPress or Shopify integration connected. Connect one first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        recommendations = Recommendation.objects.filter(
+            id__in=recommendation_ids, analysis_run=run
+        )
+
+        results = apply_fixes(run, integration, list(recommendations))
+        return Response(results)

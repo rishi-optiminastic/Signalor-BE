@@ -49,3 +49,10 @@ CACHES = {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
     }
 }
+
+# Disable throttling in development
+REST_FRAMEWORK = {
+    **globals().get('REST_FRAMEWORK', {}),
+    'DEFAULT_THROTTLE_CLASSES': [],
+    'DEFAULT_THROTTLE_RATES': {},
+}
