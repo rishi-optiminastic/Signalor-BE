@@ -4,6 +4,7 @@ from .models import (
     GADataSnapshot,
     Integration,
     ShopifyDataSnapshot,
+    WooCommerceDataSnapshot,
     WordPressDataSnapshot,
 )
 
@@ -74,42 +75,30 @@ class ShopifyDataSnapshotSerializer(serializers.ModelSerializer):
 class WordPressConnectSerializer(serializers.Serializer):
     email = serializers.EmailField()
     site_url = serializers.CharField(max_length=500)
-    username = serializers.CharField(max_length=255, required=False, default="", allow_blank=True)
-    app_password = serializers.CharField(max_length=255, required=False, default="", allow_blank=True)
+    return_to = serializers.CharField(required=False, default="", allow_blank=True)
+    frontend_base = serializers.CharField(required=False, default="", allow_blank=True)
+    org_id = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_email(self, value):
         return value.lower().strip()
 
     def validate_site_url(self, value):
         import re
+        from urllib.parse import urlparse
+
         site_url = value.strip().rstrip("/")
-        site_url = re.sub(r'^https?s+://', 'https://', site_url)
+        site_url = re.sub(r"^https?://", "https://", site_url, flags=re.IGNORECASE)
         if not site_url.startswith(("http://", "https://")):
             site_url = f"https://{site_url}"
-        from urllib.parse import urlparse
         parsed = urlparse(site_url)
         if not parsed.netloc or "." not in parsed.netloc:
             raise serializers.ValidationError(
-                "Invalid site URL. Please provide a valid WordPress site address."
+                "Invalid site URL. Please provide your WordPress.com site address "
+                "(e.g. https://yoursite.wordpress.com or your mapped custom domain)."
             )
         return site_url
 
     def validate(self, data):
-        site_url = data.get("site_url", "")
-        is_wpcom = ".wordpress.com" in site_url or ".wp.com" in site_url
-        if not is_wpcom:
-            username = data.get("username", "").strip()
-            app_password = data.get("app_password", "").strip()
-            
-            if not username:
-                raise serializers.ValidationError({
-                    "username": "Required for self-hosted WordPress."
-                })
-            if not app_password:
-                raise serializers.ValidationError({
-                    "app_password": "Required for self-hosted WordPress."
-                })
-        
         return data
 
 
@@ -126,6 +115,43 @@ class WordPressDataSnapshotSerializer(serializers.ModelSerializer):
             "updated_posts_30d",
             "top_posts",
             "daily_publishing",
+            "sync_status",
+            "error_message",
+            "created_at",
+        ]
+
+
+class WooCommerceConnectSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    org_id = serializers.IntegerField(required=False, allow_null=True)
+    site_url = serializers.CharField(max_length=500)
+    consumer_key = serializers.CharField(max_length=500)
+    consumer_secret = serializers.CharField(max_length=500)
+
+    def validate_email(self, value):
+        return value.lower().strip()
+
+    def validate_site_url(self, value):
+        site_url = value.strip().rstrip("/")
+        if not site_url.startswith(("http://", "https://")):
+            site_url = f"https://{site_url}"
+        return site_url
+
+
+class WooCommerceDataSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WooCommerceDataSnapshot
+        fields = [
+            "id",
+            "date_start",
+            "date_end",
+            "total_orders",
+            "total_revenue",
+            "average_order_value",
+            "total_products",
+            "total_customers",
+            "top_products",
+            "daily_orders",
             "sync_status",
             "error_message",
             "created_at",
