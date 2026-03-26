@@ -12,6 +12,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from datetime import timedelta
+
 from .models import Subscription
 
 logger = logging.getLogger("apps")
@@ -198,3 +200,99 @@ class StripeWebhookView(APIView):
                 sub.save(update_fields=["status"])
             except Subscription.DoesNotExist:
                 pass
+
+
+class TerminateAccountView(APIView):
+    """POST /api/account/terminate/ — soft delete, deactivates in 24h."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        sub, _ = Subscription.objects.get_or_create(email=email)
+
+        if sub.deactivated_at:
+            return Response({
+                "message": "Account already scheduled for deactivation.",
+                "deactivated_at": sub.deactivated_at.isoformat(),
+            })
+
+        sub.deactivated_at = timezone.now() + timedelta(hours=24)
+        sub.save(update_fields=["deactivated_at"])
+        logger.info("Account termination scheduled for %s at %s", email, sub.deactivated_at)
+
+        return Response({
+            "message": "Account scheduled for deactivation in 24 hours.",
+            "deactivated_at": sub.deactivated_at.isoformat(),
+        })
+
+
+class CancelTerminationView(APIView):
+    """POST /api/account/cancel-termination/ — cancel soft delete."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        sub, _ = Subscription.objects.get_or_create(email=email)
+
+        if not sub.deactivated_at:
+            return Response({"message": "No pending termination."})
+
+        sub.deactivated_at = None
+        sub.save(update_fields=["deactivated_at"])
+        logger.info("Account termination cancelled for %s", email)
+
+        return Response({"message": "Termination cancelled. Your account is active."})
+
+
+class DeleteAccountView(APIView):
+    """POST /api/account/delete/ — hard delete account and all data."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "").lower().strip()
+        confirm = request.data.get("confirm", "").lower().strip()
+
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if confirm != "delete my account":
+            return Response(
+                {"error": "Please type 'delete my account' to confirm."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from apps.organizations.models import Organization
+        from apps.analyzer.models import AnalysisRun
+
+        deleted_counts = {}
+
+        # Delete analysis runs
+        runs = AnalysisRun.objects.filter(email=email)
+        deleted_counts["analysis_runs"] = runs.count()
+        runs.delete()
+
+        # Delete organizations
+        orgs = Organization.objects.filter(email=email)
+        deleted_counts["organizations"] = orgs.count()
+        orgs.delete()
+
+        # Delete subscription
+        try:
+            sub = Subscription.objects.get(email=email)
+            sub.delete()
+            deleted_counts["subscription"] = 1
+        except Subscription.DoesNotExist:
+            deleted_counts["subscription"] = 0
+
+        logger.info("Account permanently deleted for %s: %s", email, deleted_counts)
+
+        return Response({
+            "message": "Account permanently deleted.",
+            "deleted": deleted_counts,
+        })

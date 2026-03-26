@@ -175,10 +175,11 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
         details["checks"]["has_viewport"] = None
         details["checks"]["has_canonical"] = None
         details["checks"]["crawl_blocked"] = True
-        # Scale score: we checked 70pts worth, normalize to 100
-        # so partial results are fairly represented
-        if score > 0:
-            score = score * (100 / 70)
+        details["findings"].append("crawl_failed")
+        # Crawl failed — page is inaccessible, cap score severely
+        # File-level checks (llms.txt, robots, sitemap) still count
+        # but max 30/100 since the page itself can't be analyzed
+        score = min(score, 30)
 
     score = safe_score(score)
     details["score"] = score

@@ -48,6 +48,7 @@ class Subscription(models.Model):
     email = models.EmailField(unique=True, db_index=True)
     stripe_customer_id = models.CharField(max_length=255, blank=True, default="")
     stripe_subscription_id = models.CharField(max_length=255, blank=True, default="")
+    deactivated_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UNPAID)
     current_period_end = models.DateTimeField(null=True, blank=True)
     currency = models.CharField(max_length=3, default="usd")

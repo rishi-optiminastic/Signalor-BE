@@ -495,6 +495,15 @@ RECOMMENDATION_RULES = {
         "impact_estimate": "Could improve your score by ~10 points",
         "category": "technical",
     },
+    "crawl_failed": {
+        "pillar": "technical",
+        "priority": "critical",
+        "title": "Fix Page Accessibility — Crawler Blocked",
+        "description": "The crawler could not access your page. This means AI models (ChatGPT, Gemini, Perplexity) also cannot read your content. Your technical score is severely capped until this is resolved.",
+        "action": "STEP 1 — Check if your page returns a 200 OK status code.\nSTEP 2 — Ensure your server doesn't block bot user agents.\nSTEP 3 — Check for Cloudflare/firewall bot protection that may be blocking crawlers.\nSTEP 4 — Verify robots.txt isn't blocking the page path.\nSTEP 5 — Test with: curl -A 'Mozilla/5.0' your-url",
+        "impact_estimate": "Critical — your page is invisible to AI. Fixing this could improve your score by ~50+ points",
+        "category": "technical",
+    },
     "meta_noindex": {
         "pillar": "technical",
         "priority": "critical",
@@ -821,6 +830,7 @@ IMPACT_SCORES = {
     "no_publish_date": 35,
     "no_updated_date": 25,
     # Technical (boosted — actionable pillar, instant fixes)
+    "crawl_failed": 100,        # Page inaccessible = everything fails
     "ai_bots_blocked": 97,      # Blocking AI = zero visibility
     "meta_noindex": 95,         # Blocking indexing = zero visibility
     "no_llms_txt": 80,          # Quick win — create a file
