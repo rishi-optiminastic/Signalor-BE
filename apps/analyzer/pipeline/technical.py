@@ -71,7 +71,7 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
     else:
         details["findings"].append("no_llms_txt")
 
-    # robots.txt allows AI bots (20 pts)
+    # robots.txt allows AI bots (10 pts — intentional config is rewarded more than default)
     robots_txt = fetch_file_content(crawl.url, "robots.txt")
     has_robots = bool(robots_txt.strip())
     details["checks"]["has_robots_txt"] = has_robots
@@ -80,11 +80,11 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
         details["checks"]["ai_bots_allowed"] = allows_ai
         details["checks"]["blocked_bots"] = blocked_bots
         if allows_ai:
-            score += 20
+            score += 10  # Intentional robots.txt that allows AI = full credit
         else:
             details["findings"].append("ai_bots_blocked")
     else:
-        score += 20
+        score += 5  # No robots.txt = default allow, but not an achievement
         details["checks"]["ai_bots_allowed"] = True
 
     # sitemap.xml (10 pts)
@@ -95,22 +95,24 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
     else:
         details["findings"].append("no_sitemap")
 
-    # HTTPS (5 pts)
+    # HTTPS (2 pts — everyone has this now, not a differentiator)
     details["checks"]["is_https"] = crawl.is_https
     if crawl.is_https:
-        score += 5
+        score += 2
     else:
         details["findings"].append("no_https")
 
-    # Load time (15 pts) — use whatever we got, even from a failed request
+    # Load time (12 pts — reduced, CDN-hosted sites shouldn't get max easily)
     if crawl.load_time > 0:
         details["checks"]["load_time"] = round(crawl.load_time, 2)
-        if crawl.load_time < 1.5:
-            score += 15
+        if crawl.load_time < 1.0:
+            score += 12
+        elif crawl.load_time < 2.0:
+            score += 8
         elif crawl.load_time < 3.0:
-            score += 10
-        elif crawl.load_time < 5.0:
             score += 5
+        elif crawl.load_time < 5.0:
+            score += 2
         else:
             details["findings"].append("slow_load_time")
     else:
@@ -119,33 +121,33 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
     # ── Checks that REQUIRE page HTML ─────────────────────────────────
 
     if has_html and soup:
-        # Meta robots ok (10 pts)
+        # Meta robots ok (5 pts — absence of noindex isn't an achievement)
         meta_robots = soup.find("meta", attrs={"name": "robots"})
         robots_content = meta_robots.get("content", "").lower() if meta_robots else ""
         noindex = "noindex" in robots_content
         details["checks"]["meta_robots_ok"] = not noindex
         if not noindex:
-            score += 10
+            score += 5
         else:
             details["findings"].append("meta_noindex")
 
-        # Viewport meta (10 pts)
+        # Viewport meta (2 pts — every platform auto-adds this)
         viewport = soup.find("meta", attrs={"name": "viewport"})
         details["checks"]["has_viewport"] = viewport is not None
         if viewport:
-            score += 10
+            score += 2
         else:
             details["findings"].append("no_viewport")
 
-        # Canonical tag (10 pts)
+        # Canonical tag (5 pts — platforms auto-add, but still useful)
         canonical = soup.find("link", attrs={"rel": "canonical"})
         details["checks"]["has_canonical"] = canonical is not None
         if canonical:
-            score += 10
+            score += 5
         else:
             details["findings"].append("no_canonical")
 
-        # OG / Twitter Card metadata (10 pts) — affects AI scraping quality
+        # OG / Twitter Card metadata (10 pts — requires actual content)
         og_title = soup.find("meta", property="og:title")
         og_desc = soup.find("meta", property="og:description")
         og_image = soup.find("meta", property="og:image")
@@ -170,6 +172,27 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
             details["findings"].append("no_og_metadata")
         else:
             score += og_score
+
+        # Internal linking depth (10 pts — measures real site structure)
+        all_links = soup.find_all("a", href=True)
+        from urllib.parse import urlparse
+        site_domain = urlparse(crawl.url).netloc
+        internal_links = set()
+        for a in all_links:
+            href = a.get("href", "")
+            if href.startswith("/") or site_domain in href:
+                path = urlparse(href).path.strip("/")
+                if path and path not in ("", "#"):
+                    internal_links.add(path)
+        details["checks"]["internal_link_count"] = len(internal_links)
+        if len(internal_links) >= 10:
+            score += 10
+        elif len(internal_links) >= 5:
+            score += 6
+        elif len(internal_links) >= 3:
+            score += 3
+        else:
+            details["findings"].append("few_internal_links_technical")
     else:
         details["checks"]["meta_robots_ok"] = None
         details["checks"]["has_viewport"] = None

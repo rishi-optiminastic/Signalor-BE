@@ -8,88 +8,52 @@ logger = logging.getLogger("apps")
 # The 4 actionable pillars (eeat, technical, entity, ai_visibility)
 # carry the most weight because users can take direct action on them.
 DEFAULT_WEIGHTS = {
-    "content": 0.10,
+    "content": 0.15,
     "schema": 0.10,
-    "eeat": 0.22,
-    "technical": 0.20,
+    "eeat": 0.20,
+    "technical": 0.12,
     "entity": 0.20,
-    "ai_visibility": 0.18,
+    "ai_visibility": 0.23,
 }
 
 # Industry-specific weight overrides
 # content + schema always sum to 0.20; actionable pillars get the 0.80
 INDUSTRY_WEIGHTS = {
     "health": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.30,      # Health content NEEDS trust signals
-        "technical": 0.15,
-        "entity": 0.15,
-        "ai_visibility": 0.20,
+        "content": 0.15, "schema": 0.10, "eeat": 0.27,
+        "technical": 0.10, "entity": 0.15, "ai_visibility": 0.23,
     },
     "medical": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.30,
-        "technical": 0.15,
-        "entity": 0.15,
-        "ai_visibility": 0.20,
+        "content": 0.15, "schema": 0.10, "eeat": 0.27,
+        "technical": 0.10, "entity": 0.15, "ai_visibility": 0.23,
     },
     "finance": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.28,      # Financial content needs authority
-        "technical": 0.15,
-        "entity": 0.22,
-        "ai_visibility": 0.15,
+        "content": 0.15, "schema": 0.10, "eeat": 0.25,
+        "technical": 0.10, "entity": 0.20, "ai_visibility": 0.20,
     },
     "ecommerce": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.15,
-        "technical": 0.20,
-        "entity": 0.20,
-        "ai_visibility": 0.25,
+        "content": 0.15, "schema": 0.10, "eeat": 0.15,
+        "technical": 0.12, "entity": 0.20, "ai_visibility": 0.28,
     },
     "saas": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.18,
-        "technical": 0.20,
-        "entity": 0.17,
-        "ai_visibility": 0.25,   # AI visibility matters most for SaaS discovery
+        "content": 0.15, "schema": 0.10, "eeat": 0.17,
+        "technical": 0.12, "entity": 0.18, "ai_visibility": 0.28,
     },
     "legal": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.30,
-        "technical": 0.15,
-        "entity": 0.15,
-        "ai_visibility": 0.20,
+        "content": 0.15, "schema": 0.10, "eeat": 0.27,
+        "technical": 0.10, "entity": 0.15, "ai_visibility": 0.23,
     },
     "education": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.25,
-        "technical": 0.15,
-        "entity": 0.20,
-        "ai_visibility": 0.20,
+        "content": 0.15, "schema": 0.10, "eeat": 0.23,
+        "technical": 0.10, "entity": 0.18, "ai_visibility": 0.24,
     },
     "news": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.25,
-        "technical": 0.15,
-        "entity": 0.15,
-        "ai_visibility": 0.25,
+        "content": 0.15, "schema": 0.10, "eeat": 0.22,
+        "technical": 0.10, "entity": 0.18, "ai_visibility": 0.25,
     },
     "local_business": {
-        "content": 0.10,
-        "schema": 0.10,
-        "eeat": 0.18,
-        "technical": 0.17,
-        "entity": 0.25,    # Local businesses need strong entity presence
-        "ai_visibility": 0.20,
+        "content": 0.15, "schema": 0.10, "eeat": 0.18,
+        "technical": 0.10, "entity": 0.25, "ai_visibility": 0.22,
     },
 }
 
