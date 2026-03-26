@@ -58,11 +58,10 @@ class Migration(migrations.Migration):
                 "ordering": ["-created_at"],
             },
         ),
-        migrations.RenameIndex(
-            model_name="wordpressdatasnapshot",
-            new_name="integration_integra_579d05_idx",
-            old_name="integration_integra_wp_idx",
-        ),
+        # WordPress index rename is handled only by
+        # 0004_rename_integration_integra_wp_idx_integration_integra_579d05_idx
+        # (parallel 0004); duplicate RenameIndex here breaks deploy when that
+        # migration runs first and renames the index before this file applies.
         migrations.AlterField(
             model_name="integration",
             name="provider",
