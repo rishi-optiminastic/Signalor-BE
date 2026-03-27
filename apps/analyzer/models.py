@@ -151,6 +151,7 @@ class Recommendation(models.Model):
     action = models.TextField()
     impact_estimate = models.CharField(max_length=100, blank=True, default="")
     category = models.CharField(max_length=30)
+    why = models.CharField(max_length=200, blank=True, default="")
 
     class Meta:
         ordering = ["priority", "pillar"]

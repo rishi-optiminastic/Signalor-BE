@@ -857,62 +857,96 @@ IMPACT_SCORES = {
 }
 
 MAX_RECOMMENDATIONS = 12
+MAX_PER_PILLAR = 3
 
-# Off-page findings that require external actions (Reddit, Medium, Wikipedia, etc.)
-# These are filtered out — we only show on-page + technical recommendations
+# Off-page findings — filtered out, only on-page + technical shown
 OFFPAGE_FINDINGS = {
-    "brand_not_in_ai",
-    "no_medium_ai_presence",
-    "no_medium_presence",
-    "no_reddit_ai_presence",
-    "no_reddit_presence",
-    "no_social_profiles",
-    "no_wikipedia_presence",
-    "not_in_google_ai",
-    "weak_brand_site",
+    "brand_not_in_ai", "no_medium_ai_presence", "no_medium_presence",
+    "no_reddit_ai_presence", "no_reddit_presence", "no_social_profiles",
+    "no_wikipedia_presence", "not_in_google_ai", "weak_brand_site",
 }
-
-# Off-page pillars — entire pillar is external action
 OFFPAGE_PILLARS = {"entity", "ai_visibility"}
 
+# Why each pillar matters for AI visibility
+PILLAR_WHY = {
+    "content": "AI models extract and cite well-structured content with citations and data",
+    "schema": "Structured data helps AI understand your page context and extract answers",
+    "eeat": "AI systems prioritize content from trusted, authoritative sources",
+    "technical": "AI crawlers must be able to access and parse your site efficiently",
+}
 
-def generate_recommendations(pillar_details: dict[str, dict]) -> list[dict]:
-    """
-    Generate top on-page + technical recommendations only.
+# Suppress recs for pillars scoring above this threshold
+SUPPRESS_THRESHOLD = 70
 
-    Filters out off-page/external actions (Reddit, Medium, Wikipedia, etc.)
-    Caps at MAX_RECOMMENDATIONS to avoid overwhelming users.
-    Sorts by impact score, then by priority.
+
+def generate_recommendations(
+    pillar_details: dict[str, dict],
+    pillar_scores: dict[str, float] | None = None,
+) -> list[dict]:
     """
+    Smart recommendation engine:
+    1. Filters off-page actions
+    2. Sorts by pillar weakness (lowest score first) + impact
+    3. Caps at MAX_PER_PILLAR per pillar
+    4. Suppresses recs for high-scoring pillars (>70)
+    5. Adds "why" context to each recommendation
+    6. Caps total at MAX_RECOMMENDATIONS
+    """
+    scores = pillar_scores or {}
     candidates = []
 
     for _pillar_name, details in pillar_details.items():
         findings = details.get("findings", [])
         for finding in findings:
-            # Skip off-page findings
             if finding in OFFPAGE_FINDINGS:
                 continue
 
             rule = RECOMMENDATION_RULES.get(finding)
             if rule:
-                # Skip off-page pillars
-                if rule.get("pillar") in OFFPAGE_PILLARS:
+                pillar = rule.get("pillar", "")
+                if pillar in OFFPAGE_PILLARS:
+                    continue
+
+                # Suppress recs for pillars already scoring well
+                pillar_score = scores.get(pillar, 0)
+                if pillar_score >= SUPPRESS_THRESHOLD:
                     continue
 
                 rec = dict(rule)
                 rec["impact_score"] = IMPACT_SCORES.get(finding, 10)
+
+                # Priority engine: combine pillar weakness + impact + severity
+                pillar_urgency = 100 - pillar_score  # lower score = higher urgency
+                rec["_sort_score"] = (
+                    pillar_urgency * 0.4 +
+                    rec["impact_score"] * 0.4 +
+                    (100 if rec["priority"] == "critical" else 60 if rec["priority"] == "high" else 30) * 0.2
+                )
+
+                # Add "why this matters"
+                rec["why"] = PILLAR_WHY.get(pillar, "")
+
                 candidates.append(rec)
 
-    # Sort by impact score (highest first), then by priority as tiebreaker
-    candidates.sort(
-        key=lambda r: (-r["impact_score"], PRIORITY_ORDER.get(r["priority"], 99))
-    )
+    # Sort by combined priority score (highest first)
+    candidates.sort(key=lambda r: -r["_sort_score"])
 
-    # Cap at max recommendations
-    top = candidates[:MAX_RECOMMENDATIONS]
+    # Cap per pillar — max 3 from any single pillar
+    pillar_counts: dict[str, int] = {}
+    filtered = []
+    for rec in candidates:
+        p = rec["pillar"]
+        if pillar_counts.get(p, 0) >= MAX_PER_PILLAR:
+            continue
+        pillar_counts[p] = pillar_counts.get(p, 0) + 1
+        filtered.append(rec)
 
-    # Remove internal impact_score before returning
+    # Cap total
+    top = filtered[:MAX_RECOMMENDATIONS]
+
+    # Clean internal fields
     for rec in top:
         rec.pop("impact_score", None)
+        rec.pop("_sort_score", None)
 
     return top

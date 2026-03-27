@@ -456,7 +456,13 @@ def run_single_page_analysis(run_id: int):
             "entity": entity_details,
             "ai_visibility": ai_vis_details,
         }
-        recs = generate_recommendations(pillar_details)
+        pillar_scores = {
+            "content": content_score,
+            "schema": schema_score_val,
+            "eeat": eeat_score_val,
+            "technical": technical_score_val,
+        }
+        recs = generate_recommendations(pillar_details, pillar_scores=pillar_scores)
         for rec in recs:
             Recommendation.objects.create(analysis_run=run, **rec)
 

@@ -26,7 +26,7 @@ class RecommendationSerializer(serializers.ModelSerializer):
         model = Recommendation
         fields = [
             "id", "pillar", "priority", "title", "description",
-            "action", "impact_estimate", "category", "can_auto_fix",
+            "action", "impact_estimate", "category", "can_auto_fix", "why",
         ]
 
     def get_can_auto_fix(self, obj):
