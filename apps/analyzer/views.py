@@ -2068,6 +2068,87 @@ class AutoFixView(APIView):
         return Response(results)
 
 
+class AutoFixPreviewView(APIView):
+    """POST /api/analyzer/runs/s/<slug>/auto-fix/preview/ — generate fix preview without applying."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .auto_fix import generate_fix_preview
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        rec_id = request.data.get("recommendation_id")
+        email = request.data.get("email", "").lower().strip()
+
+        if not rec_id or not email:
+            return Response({"error": "recommendation_id and email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        org = run.organization
+        if not org:
+            return Response({"error": "No organization linked."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .integration_resolve import resolve_store_integration_for_run
+        integration = resolve_store_integration_for_run(org, run.url or "")
+
+        if not integration:
+            return Response({"error": "No store integration connected."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            rec = Recommendation.objects.get(id=rec_id, analysis_run=run)
+        except Recommendation.DoesNotExist:
+            return Response({"error": "Recommendation not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        preview = generate_fix_preview(run, integration, rec)
+        return Response(preview)
+
+
+class AutoFixApproveView(APIView):
+    """POST /api/analyzer/runs/s/<slug>/auto-fix/approve/ — apply a previewed fix via plugin."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .auto_fix import apply_approved_fix
+        from .models import AutoFixJob
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        rec_id = request.data.get("recommendation_id")
+        approved_content = request.data.get("content", "")
+        fix_type = request.data.get("fix_type", "content")
+
+        if not rec_id:
+            return Response({"error": "recommendation_id required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        org = run.organization
+        if not org:
+            return Response({"error": "No organization linked."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .integration_resolve import resolve_store_integration_for_run
+        integration = resolve_store_integration_for_run(org, run.url or "")
+
+        if not integration:
+            return Response({"error": "No store integration connected."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            rec = Recommendation.objects.get(id=rec_id, analysis_run=run)
+        except Recommendation.DoesNotExist:
+            return Response({"error": "Recommendation not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        result = apply_approved_fix(run, integration, rec, approved_content, fix_type)
+
+        # Track in AutoFixJob
+        AutoFixJob.objects.create(
+            analysis_run=run,
+            recommendation=rec,
+            fix_type=fix_type,
+            status=result.get("status", "failed"),
+            response_data=result,
+            error_message=result.get("message", "") if result.get("status") == "failed" else "",
+        )
+
+        return Response(result)
+
+
 # ── GEO improvements (fix plan + apply) ─────────────────────────────────────
 
 class GeoImprovementsView(APIView):

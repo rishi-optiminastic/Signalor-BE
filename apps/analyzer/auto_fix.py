@@ -731,3 +731,149 @@ def apply_fixes(run, integration, recommendations: list[Recommendation]) -> list
             })
 
     return results
+
+
+# ── Preview + Approve (Plugin-based flow) ─────────────────────────────────
+
+def generate_fix_preview(run, integration, recommendation) -> dict:
+    """Generate fix content via LLM and return before/after WITHOUT applying."""
+    fix_type = _detect_fix_type(recommendation)
+    brand_name = run.brand_name or "the website"
+
+    # Fetch current content
+    page_info, current_content = _fetch_page_content(integration, run.url)
+    if not page_info:
+        return {"status": "error", "message": f"Could not find the page at {run.url}"}
+
+    # Generate fix via LLM
+    if fix_type == "content_enhance":
+        prompt = f"""You are a GEO (Generative Engine Optimization) expert.
+
+TASK: Apply this recommendation to the page content below.
+
+RECOMMENDATION: {recommendation.title}
+DESCRIPTION: {recommendation.description}
+INSTRUCTIONS: {recommendation.action}
+BRAND: {brand_name}
+
+CURRENT CONTENT:
+{current_content[:10000]}
+
+RULES:
+1. Keep ALL existing content. Do NOT remove anything.
+2. ADD improvements naturally inline.
+3. Use real, verifiable facts and sources.
+4. Return ONLY the improved HTML. No markdown, no explanations."""
+
+        raw = _call_llm(prompt, f"preview-{recommendation.category}")
+        enhanced, err = _sanitize_llm_output(raw, "content")
+        if err:
+            return {"status": "error", "message": err}
+
+        return {
+            "status": "preview",
+            "fix_type": fix_type,
+            "recommendation_id": recommendation.id,
+            "recommendation_title": recommendation.title,
+            "original": current_content[:5000],
+            "preview": enhanced[:5000],
+            "full_content": enhanced,
+            "target_post_id": page_info.get("id"),
+            "target_type": page_info.get("type", "posts"),
+        }
+
+    elif fix_type == "schema_markup":
+        prompt = f"""Generate JSON-LD structured data for this website.
+BRAND: {brand_name}
+URL: {run.url}
+PAGE CONTENT (first 3000 chars): {current_content[:3000]}
+
+Include Organization, WebSite, and relevant type schemas.
+Return ONLY valid JSON-LD wrapped in <script type="application/ld+json"> tags."""
+
+        raw = _call_llm(prompt, "preview-schema")
+        schema_html, err = _sanitize_llm_output(raw, "schema")
+        if err:
+            return {"status": "error", "message": err}
+
+        if "<script" not in schema_html:
+            schema_html = f'<script type="application/ld+json">\n{schema_html}\n</script>'
+
+        return {
+            "status": "preview",
+            "fix_type": "schema",
+            "recommendation_id": recommendation.id,
+            "recommendation_title": recommendation.title,
+            "original": "",
+            "preview": schema_html[:5000],
+            "full_content": schema_html,
+        }
+
+    elif fix_type == "create_file":
+        filename = "llms.txt" if "llms" in recommendation.title.lower() else "robots.txt"
+        prompt = f"""Create a comprehensive {filename} file for:
+BRAND: {brand_name}
+URL: {run.url}
+PAGE CONTENT (first 2000 chars): {current_content[:2000]}
+
+Include: About, Key Information, Products/Services, Contact sections with URLs."""
+
+        raw = _call_llm(prompt, f"preview-{filename}")
+        file_content, err = _sanitize_llm_output(raw, "file")
+        if err:
+            return {"status": "error", "message": err}
+
+        return {
+            "status": "preview",
+            "fix_type": "llms",
+            "recommendation_id": recommendation.id,
+            "recommendation_title": recommendation.title,
+            "original": "",
+            "preview": file_content[:5000],
+            "full_content": file_content,
+        }
+
+    return {"status": "error", "message": f"Unknown fix type: {fix_type}"}
+
+
+def apply_approved_fix(run, integration, recommendation, content: str, fix_type: str) -> dict:
+    """Apply a user-approved fix — sends to plugin or pushes directly."""
+    provider = integration.provider
+    site_url = integration.metadata.get("site_url", "")
+    api_key = integration.metadata.get("signalor_api_key", "")
+
+    # Try plugin first (WordPress with Signalor plugin installed)
+    if provider == "wordpress" and api_key and site_url:
+        try:
+            resp = requests.post(
+                f"{site_url}/wp-json/signalor/v1/apply-fix",
+                headers={"X-Signalor-Key": api_key, "Content-Type": "application/json"},
+                json={
+                    "fix_type": fix_type,
+                    "url": run.url,
+                    "content": content if fix_type in ("content", "faq") else None,
+                    "schema": content if fix_type == "schema" else None,
+                    "llms_content": content if fix_type == "llms" else None,
+                },
+                timeout=20,
+            )
+            if resp.ok:
+                return resp.json()
+            logger.warning("Plugin apply-fix failed: %d %s", resp.status_code, resp.text[:200])
+        except Exception as exc:
+            logger.warning("Plugin apply-fix error: %s", exc)
+
+    # Fallback: direct API push (existing behavior)
+    page_info, _ = _fetch_page_content(integration, run.url)
+    if not page_info:
+        return {"status": "failed", "message": f"Could not find page at {run.url}"}
+
+    if fix_type in ("content", "faq", "content_enhance"):
+        return _push_content(integration, page_info, content)
+    elif fix_type == "schema":
+        new_content = _ + "\n" + content if _ else content
+        return _push_content(integration, page_info, new_content)
+    elif fix_type == "llms":
+        return _fix_create_file(integration, run, recommendation)
+
+    return {"status": "failed", "message": f"Cannot apply fix type: {fix_type}"}

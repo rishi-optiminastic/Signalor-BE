@@ -36,6 +36,8 @@ from .views import (
     ScoreHistoryView,
     ScheduledAnalysisView,
     AutoFixView,
+    AutoFixPreviewView,
+    AutoFixApproveView,
     GeoImprovementsView,
     ApplyGeoFixesAndReanalyzeView,
 )
@@ -59,6 +61,8 @@ urlpatterns = [
     path("runs/s/<str:slug>/competitors/", CompetitorListCreateView.as_view(), name="competitor-list-create"),
     path("runs/s/<str:slug>/competitors/<int:competitor_id>/", CompetitorDetailView.as_view(), name="competitor-detail"),
     path("runs/s/<str:slug>/auto-fix/", AutoFixView.as_view(), name="auto-fix"),
+    path("runs/s/<str:slug>/auto-fix/preview/", AutoFixPreviewView.as_view(), name="auto-fix-preview"),
+    path("runs/s/<str:slug>/auto-fix/approve/", AutoFixApproveView.as_view(), name="auto-fix-approve"),
     path("runs/s/<str:slug>/", AnalysisRunBySlugView.as_view(), name="run-by-slug"),
     path("runs/<int:run_id>/status/", AnalysisRunStatusView.as_view(), name="run-status"),
     path("runs/<int:run_id>/export-pdf/", ExportPDFView.as_view(), name="export-pdf"),
