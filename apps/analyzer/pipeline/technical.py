@@ -67,6 +67,15 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
             score += 6
             details["checks"]["llms_txt_quality"] = "minimal"
             details["findings"].append("llms_txt_minimal_content")
+        # llms.txt depth bonus (5 pts) — reward detailed, well-structured files
+        if has_llms_txt and llms_len > 500:
+            sections = sum(1 for line in llms_content.splitlines() if line.strip().startswith('#'))
+            urls_count = llms_content.lower().count('http')
+            if sections >= 3 and urls_count >= 3:
+                score += 5
+                details["checks"]["llms_txt_depth_bonus"] = True
+            else:
+                details["checks"]["llms_txt_depth_bonus"] = False
     else:
         details["findings"].append("no_llms_txt")
 
@@ -82,6 +91,13 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
             score += 10  # Intentional robots.txt that allows AI = full credit
         else:
             details["findings"].append("ai_bots_blocked")
+        # Explicit AI bot rules bonus (5 pts) — reward intentional AI crawler directives
+        robots_lower = robots_txt.lower()
+        explicit_ai_rules = sum(1 for bot in AI_BOT_AGENTS if bot.lower() in robots_lower)
+        details["checks"]["explicit_ai_bot_rules"] = explicit_ai_rules
+        if explicit_ai_rules >= 2:
+            score += 5
+            details["checks"]["ai_rules_bonus"] = True
     else:
         score += 5  # No robots.txt = default allow, but not an achievement
         details["checks"]["ai_bots_allowed"] = True
@@ -192,6 +208,41 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
             score += 3
         else:
             details["findings"].append("few_internal_links_technical")
+
+        # AI-specific meta tags (5 pts) — reward explicit AI crawler directives in HTML
+        ai_meta_score = 0
+        # Check for bot-specific meta tags
+        for bot_name in ["googlebot", "bingbot", "gptbot", "anthropic-ai"]:
+            bot_meta = soup.find("meta", attrs={"name": re.compile(bot_name, re.I)})
+            if bot_meta:
+                ai_meta_score += 2
+        # Check for data-nosnippet, data-noai attributes (explicit AI control)
+        noai_elements = soup.find_all(attrs={"data-noai": True})
+        if noai_elements:
+            ai_meta_score += 1  # Shows awareness of AI scraping
+        ai_meta_score = min(ai_meta_score, 5)
+        details["checks"]["ai_meta_tags_score"] = ai_meta_score
+        score += ai_meta_score
+
+        # Structured data validation (5 pts) — reward valid JSON-LD on page
+        import json as _json
+        scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
+        valid_schemas = 0
+        for script in scripts:
+            try:
+                data = _json.loads(script.string or "")
+                if isinstance(data, dict) and "@context" in data:
+                    valid_schemas += 1
+                elif isinstance(data, list) and len(data) > 0:
+                    valid_schemas += 1
+            except (ValueError, TypeError):
+                pass
+        details["checks"]["valid_schema_count"] = valid_schemas
+        if valid_schemas >= 2:
+            score += 5
+        elif valid_schemas >= 1:
+            score += 3
+
     else:
         details["checks"]["meta_robots_ok"] = None
         details["checks"]["has_viewport"] = None
