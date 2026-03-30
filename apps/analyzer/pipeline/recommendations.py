@@ -876,7 +876,8 @@ PILLAR_WHY = {
 }
 
 # Suppress recs for pillars scoring above this threshold
-SUPPRESS_THRESHOLD = 70
+# Set high so we always push toward 100 (especially technical)
+SUPPRESS_THRESHOLD = 95
 
 
 def generate_recommendations(

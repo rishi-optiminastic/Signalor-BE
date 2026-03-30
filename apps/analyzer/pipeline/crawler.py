@@ -32,17 +32,28 @@ class CrawlResult:
     load_time: float = 0.0
     error: str = ""
     is_https: bool = False
+    session: requests.Session | None = field(default=None, repr=False)
 
     @property
     def ok(self) -> bool:
         return self.status_code == 200 and self.soup is not None
 
 
-def crawl_page(url: str) -> CrawlResult:
+def crawl_page(url: str, storefront_password: str = "") -> CrawlResult:
     result = CrawlResult(url=url)
     parsed = urlparse(url)
     result.is_https = parsed.scheme == "https"
 
+    # If storefront password provided, authenticate first (Shopify dev stores)
+    session = requests.Session()
+    if storefront_password:
+        try:
+            password_url = f"{parsed.scheme}://{parsed.netloc}/password"
+            session.post(password_url, data={"password": storefront_password}, timeout=10)
+        except Exception:
+            pass  # Continue even if password auth fails
+
+    result.session = session
     last_error = ""
 
     for attempt in range(MAX_RETRIES + 1):
@@ -51,7 +62,6 @@ def crawl_page(url: str) -> CrawlResult:
             "User-Agent": ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            # Avoid brotli payloads in environments without brotli decoder support.
             "Accept-Encoding": "gzip, deflate",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
@@ -59,7 +69,7 @@ def crawl_page(url: str) -> CrawlResult:
 
         try:
             start = time.time()
-            resp = requests.get(
+            resp = session.get(
                 url,
                 headers=headers,
                 timeout=TIMEOUT,
@@ -142,11 +152,12 @@ def crawl_page(url: str) -> CrawlResult:
     return result
 
 
-def check_file_exists(base_url: str, path: str) -> bool:
+def check_file_exists(base_url: str, path: str, session: requests.Session | None = None) -> bool:
     parsed = urlparse(base_url)
     url = f"{parsed.scheme}://{parsed.netloc}/{path.lstrip('/')}"
+    http = session or requests
     try:
-        resp = requests.head(
+        resp = http.head(
             url,
             headers={"User-Agent": USER_AGENTS[0]},
             timeout=5,
@@ -157,18 +168,23 @@ def check_file_exists(base_url: str, path: str) -> bool:
         return False
 
 
-def fetch_file_content(base_url: str, path: str) -> str:
+def fetch_file_content(base_url: str, path: str, session: requests.Session | None = None) -> str:
     parsed = urlparse(base_url)
     url = f"{parsed.scheme}://{parsed.netloc}/{path.lstrip('/')}"
+    http = session or requests
     try:
-        resp = requests.get(
+        resp = http.get(
             url,
             headers={"User-Agent": USER_AGENTS[0]},
             timeout=5,
             allow_redirects=True,
         )
         if resp.status_code == 200:
-            return resp.text
+            text = resp.text
+            # Guard: if the response is an HTML password page, it's not the file
+            if "storefront-password" in text or ('id="password"' in text and "password protected" in text.lower()):
+                return ""
+            return text
     except requests.RequestException:
         pass
     return ""

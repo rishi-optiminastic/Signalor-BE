@@ -81,24 +81,65 @@ def _crawl_via_integration(run: AnalysisRun) -> CrawlResult | None:
 
 
 def _save_probes_and_tracks(run: AnalysisRun, probes_data: list[dict], brand_name: str, brand_url: str):
-    """Save AIVisibilityProbe rows and backfill PromptTrack/PromptResult rows."""
-    from .pipeline.prompt_tracker import fire_prompt_across_engines
+    """Save AIVisibilityProbe rows and generate AI-powered brand-specific prompt tracks."""
+    from .pipeline.prompt_tracker import generate_brand_prompts, fire_prompt_across_engines, compute_prompt_score
 
+    # Save visibility probes
     for probe in probes_data:
         AIVisibilityProbe.objects.create(analysis_run=run, **probe)
 
-        # Backfill into the new prompt tracking models
+    # Generate 10 brand-relevant prompts using AI
+    # Get industry context from the probes
+    industry = ""
+    if probes_data:
+        prompt_used = probes_data[0].get("prompt_used", "")
+        # Extract industry from probe context
+        for probe in probes_data:
+            if probe.get("prompt_used"):
+                industry = probe["prompt_used"].split("?")[0].split("best")[-1].strip() if "best" in probe["prompt_used"] else ""
+                break
+
+    page_content = ""
+    if run.organization:
+        # Try to get page content from latest crawl
+        try:
+            from .pipeline.crawler import crawl_page
+            # Don't re-crawl — just use what we have
+            pass
+        except Exception:
+            pass
+
+    try:
+        brand_prompts = generate_brand_prompts(
+            brand_name=brand_name,
+            brand_url=brand_url,
+            industry=industry,
+            page_content="",
+            count=10,
+        )
+    except Exception as exc:
+        logger.warning("AI prompt generation failed for run %d: %s", run.id, exc)
+        brand_prompts = []
+
+    # Fire each AI-generated prompt and save results
+    for prompt_text in brand_prompts:
         try:
             track = PromptTrack.objects.create(
                 analysis_run=run,
-                prompt_text=probe["prompt_used"],
+                prompt_text=prompt_text,
                 is_custom=False,
             )
-            engine_results = fire_prompt_across_engines(probe["prompt_used"], brand_name, brand_url)
+            engine_results = fire_prompt_across_engines(prompt_text, brand_name, brand_url, runs=1)
             for r in engine_results:
                 PromptResult.objects.create(prompt_track=track, **r)
+
+            # Compute and save score
+            all_results = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence"))
+            score_data = compute_prompt_score(all_results)
+            track.score = score_data["score"]
+            track.save(update_fields=["score"])
         except Exception as exc:
-            logger.warning("PromptTrack backfill failed for run %d: %s", run.id, exc)
+            logger.warning("PromptTrack creation failed for run %d: %s", run.id, exc)
 
 
 def _update_status(run: AnalysisRun, status: str, progress: int = 0):
@@ -290,7 +331,23 @@ def run_single_page_analysis(run_id: int):
 
         # Phase 1: Crawl (public URL first, then API fallback)
         _update_status(run, AnalysisRun.Status.CRAWLING, 5)
-        crawl = crawl_page(run.url)
+
+        # Check if store has a storefront password (Shopify dev stores)
+        storefront_password = ""
+        if run.organization:
+            from apps.integrations.models import Integration
+            try:
+                integration = Integration.objects.filter(
+                    organization=run.organization,
+                    is_active=True,
+                    provider__in=["shopify", "wordpress"],
+                ).first()
+                if integration:
+                    storefront_password = integration.metadata.get("storefront_password", "")
+            except Exception:
+                pass
+
+        crawl = crawl_page(run.url, storefront_password=storefront_password)
 
         if not crawl.ok:
             # Try fetching via connected integration (handles password-protected stores)

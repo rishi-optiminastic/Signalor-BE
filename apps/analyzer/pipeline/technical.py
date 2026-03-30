@@ -50,9 +50,9 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
 
     # llms.txt exists and has quality content (15 pts)
     # Check /llms.txt (WordPress/static + Shopify redirect), then app proxy path
-    llms_content = fetch_file_content(crawl.url, "llms.txt")
+    llms_content = fetch_file_content(crawl.url, "llms.txt", session=crawl.session)
     if not llms_content.strip():
-        llms_content = fetch_file_content(crawl.url, "apps/signalor/llms.txt")
+        llms_content = fetch_file_content(crawl.url, "apps/signalor/llms.txt", session=crawl.session)
     has_llms_txt = bool(llms_content.strip())
     details["checks"]["llms_txt"] = has_llms_txt
     if has_llms_txt:
@@ -83,7 +83,7 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
         details["findings"].append("no_llms_txt")
 
     # robots.txt allows AI bots (10 pts — intentional config is rewarded more than default)
-    robots_txt = fetch_file_content(crawl.url, "robots.txt")
+    robots_txt = fetch_file_content(crawl.url, "robots.txt", session=crawl.session)
     has_robots = bool(robots_txt.strip())
     details["checks"]["has_robots_txt"] = has_robots
     if has_robots:
@@ -106,7 +106,7 @@ def score_technical(crawl: CrawlResult) -> tuple[float, dict]:
         details["checks"]["ai_bots_allowed"] = True
 
     # sitemap.xml (10 pts)
-    has_sitemap = check_file_exists(crawl.url, "sitemap.xml")
+    has_sitemap = check_file_exists(crawl.url, "sitemap.xml", session=crawl.session)
     details["checks"]["has_sitemap"] = has_sitemap
     if has_sitemap:
         score += 10

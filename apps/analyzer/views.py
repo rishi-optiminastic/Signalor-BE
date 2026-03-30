@@ -1693,7 +1693,7 @@ class PromptListCreateView(APIView):
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
         run = get_object_or_404(AnalysisRun, slug=slug)
-        tracks = run.prompt_tracks.prefetch_related("results").order_by("-created_at")
+        tracks = run.prompt_tracks.prefetch_related("results").order_by("-score", "-created_at")
         serializer = PromptTrackSerializer(tracks, many=True)
         return Response(serializer.data)
 

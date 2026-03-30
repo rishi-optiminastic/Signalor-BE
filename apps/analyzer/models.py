@@ -601,6 +601,7 @@ class PromptTrack(models.Model):
     )
     prompt_text = models.TextField()
     is_custom = models.BooleanField(default=False)
+    score = models.FloatField(default=0.0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
