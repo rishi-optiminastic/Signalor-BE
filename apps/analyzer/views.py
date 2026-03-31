@@ -1670,6 +1670,37 @@ class BulkCreateUserActionView(APIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+class GeneratePromptsView(APIView):
+    """POST /api/analyzer/generate-prompts/ — AI-generate brand-relevant prompts for onboarding."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        brand_name = request.data.get("brand_name", "").strip()
+        brand_url = request.data.get("brand_url", "").strip()
+
+        if not brand_name:
+            return Response({"error": "brand_name required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .pipeline.prompt_tracker import generate_brand_prompts
+
+        try:
+            prompts = generate_brand_prompts(
+                brand_name=brand_name,
+                brand_url=brand_url,
+                count=10,
+            )
+            return Response({"prompts": prompts})
+        except Exception as exc:
+            logger.warning("Generate prompts failed: %s", exc)
+            return Response({"prompts": [
+                f"What are the best alternatives to {brand_name}?",
+                f"Is {brand_name} worth using?",
+                f"Compare {brand_name} with competitors",
+                f"What do experts recommend instead of {brand_name}?",
+                f"Top tools similar to {brand_name}",
+            ]})
+
+
 # ============ Prompt Tracking Views ============
 
 def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):

@@ -32,6 +32,7 @@ from .views import (
     CitationTrendView,
     RecheckPromptView,
     RecheckAllPromptsView,
+    GeneratePromptsView,
     # New features
     ScoreHistoryView,
     ScheduledAnalysisView,
@@ -47,6 +48,7 @@ app_name = "analyzer"
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health-check"),
     path("analyze/", StartAnalysisView.as_view(), name="start-analysis"),
+    path("generate-prompts/", GeneratePromptsView.as_view(), name="generate-prompts"),
     path("runs/history/", ScoreHistoryView.as_view(), name="run-history"),
     path("schedule/", ScheduledAnalysisView.as_view(), name="schedule"),
     path("runs/", AnalysisRunListView.as_view(), name="run-list"),
