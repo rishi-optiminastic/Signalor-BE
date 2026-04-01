@@ -2167,15 +2167,31 @@ class AutoFixApproveView(APIView):
 
         result = apply_approved_fix(run, integration, rec, approved_content, fix_type)
 
-        # Track in AutoFixJob
-        AutoFixJob.objects.create(
-            analysis_run=run,
-            recommendation=rec,
-            fix_type=fix_type,
-            status=result.get("status", "failed"),
-            response_data=result,
-            error_message=result.get("message", "") if result.get("status") == "failed" else "",
+        # Audit row — must include integration FK; failures here must not mask a successful apply
+        raw_status = result.get("status") or "failed"
+        allowed = {s.value for s in AutoFixJob.Status}
+        job_status = raw_status if raw_status in allowed else "failed"
+        err_msg = (
+            result.get("message", "")
+            if raw_status in ("failed", "error", "skipped")
+            else ""
         )
+        try:
+            AutoFixJob.objects.create(
+                analysis_run=run,
+                recommendation=rec,
+                integration=integration,
+                fix_type=fix_type,
+                status=job_status,
+                response_data=result,
+                error_message=err_msg,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist AutoFixJob after apply_approved_fix (run=%s rec=%s)",
+                run.id,
+                rec.id,
+            )
 
         return Response(result)
 
