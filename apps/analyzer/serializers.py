@@ -26,11 +26,22 @@ class RecommendationSerializer(serializers.ModelSerializer):
         model = Recommendation
         fields = [
             "id", "pillar", "priority", "title", "description",
-            "action", "impact_estimate", "category", "can_auto_fix",
+            "action", "impact_estimate", "category", "can_auto_fix", "why",
         ]
 
+    # Title keywords that indicate manual-only recommendations
+    MANUAL_TITLE_KEYWORDS = [
+        "sitemap", "enable https", "page load speed", "improve page load",
+        "crawler blocked", "blocks automated", "too slow to crawl",
+        "wikipedia", "reddit", "medium", "google ai overview",
+        "brand into ai", "social profile", "brand website signal",
+    ]
+
     def get_can_auto_fix(self, obj):
-        # Every recommendation is auto-fixable via AI
+        title_lower = (obj.title or "").lower()
+        for kw in self.MANUAL_TITLE_KEYWORDS:
+            if kw in title_lower:
+                return False
         return True
 
 
@@ -260,10 +271,45 @@ class PromptResultSerializer(serializers.ModelSerializer):
 
 class PromptTrackSerializer(serializers.ModelSerializer):
     results = PromptResultSerializer(many=True, read_only=True)
+    visibility_pct = serializers.SerializerMethodField()
+    avg_position = serializers.SerializerMethodField()
+    sentiment_label = serializers.SerializerMethodField()
+    ranking_label = serializers.SerializerMethodField()
+    total_runs = serializers.SerializerMethodField()
+    mentions = serializers.SerializerMethodField()
 
     class Meta:
         model = PromptTrack
-        fields = ["id", "prompt_text", "is_custom", "created_at", "results"]
+        fields = [
+            "id", "prompt_text", "is_custom", "score", "created_at", "results",
+            "visibility_pct", "avg_position", "sentiment_label", "ranking_label",
+            "total_runs", "mentions",
+        ]
+
+    def _score_data(self, obj):
+        if not hasattr(obj, "_score_cache"):
+            from .pipeline.prompt_tracker import compute_prompt_score
+            results = list(obj.results.values("brand_mentioned", "sentiment", "rank_position", "confidence"))
+            obj._score_cache = compute_prompt_score(results)
+        return obj._score_cache
+
+    def get_visibility_pct(self, obj):
+        return self._score_data(obj)["visibility_pct"]
+
+    def get_avg_position(self, obj):
+        return self._score_data(obj)["avg_position"]
+
+    def get_sentiment_label(self, obj):
+        return self._score_data(obj)["sentiment"]
+
+    def get_ranking_label(self, obj):
+        return self._score_data(obj)["label"]
+
+    def get_total_runs(self, obj):
+        return self._score_data(obj)["total_runs"]
+
+    def get_mentions(self, obj):
+        return self._score_data(obj)["mentions"]
 
 
 class AddPromptSerializer(serializers.Serializer):

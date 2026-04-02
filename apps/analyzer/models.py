@@ -41,6 +41,7 @@ class AnalysisRun(models.Model):
     )
     progress = models.IntegerField(default=0)
     composite_score = models.FloatField(null=True, blank=True)
+    content_hash = models.CharField(max_length=64, blank=True, default="")
     error_message = models.TextField(blank=True, default="")
     llm_logs = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -85,6 +86,7 @@ class PageScore(models.Model):
     ai_visibility_score = models.FloatField(default=0)
     ai_visibility_details = models.JSONField(default=dict)
     composite_score = models.FloatField(default=0)
+    content_hash = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -149,6 +151,7 @@ class Recommendation(models.Model):
     action = models.TextField()
     impact_estimate = models.CharField(max_length=100, blank=True, default="")
     category = models.CharField(max_length=30)
+    why = models.CharField(max_length=200, blank=True, default="")
 
     class Meta:
         ordering = ["priority", "pillar"]
@@ -598,6 +601,7 @@ class PromptTrack(models.Model):
     )
     prompt_text = models.TextField()
     is_custom = models.BooleanField(default=False)
+    score = models.FloatField(default=0.0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -610,6 +614,7 @@ class PromptResult(models.Model):
         CLAUDE = "claude", "Claude"
         GEMINI = "gemini", "Gemini"
         PERPLEXITY = "perplexity", "Perplexity"
+        GOOGLE = "google", "Google"
 
     class Sentiment(models.TextChoices):
         POSITIVE = "positive", "Positive"

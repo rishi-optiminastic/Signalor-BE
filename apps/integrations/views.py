@@ -687,6 +687,7 @@ class ShopifyAuthURLView(APIView):
         frontend_base = request.query_params.get("frontend_base", "").strip()
         org_id = request.query_params.get("org_id")
         org_id = int(org_id) if org_id and org_id.isdigit() else None
+        storefront_password = request.query_params.get("storefront_password", "").strip()
 
         if not email or not shop:
             return Response(
@@ -724,6 +725,7 @@ class ShopifyAuthURLView(APIView):
             "nonce": nonce,
             "return_to": return_to,
             "frontend_base": resolved_frontend_base,
+            "storefront_password": storefront_password,
         }
         cache.set(f"shopify_oauth_state:{nonce}", payload, timeout=15 * 60)
         state = _sign_state(payload)
@@ -839,13 +841,48 @@ class ShopifyCallbackView(APIView):
                 defaults={"is_active": True},
             )
             integration.set_access_token(access_token)
+            # Auto-link Shopify app — use shared app secret for HMAC auth
+            shopify_app_url = os.getenv("SIGNALOR_SHOPIFY_APP_URL", "").strip()
             integration.metadata = {
                 "shop_domain": shop_domain,
                 "shop_name": shop_info.get("name", shop_domain),
                 "scope": tokens.get("scope", ""),
+                "signalor_app_url": shopify_app_url,
+                "signalor_hmac_secret": os.getenv("SHOPIFY_CLIENT_SECRET", ""),
+                "storefront_password": payload.get("storefront_password", ""),
             }
             integration.save()
             _deactivate_other_store_integration(org, Integration.Provider.SHOPIFY)
+
+            # Sync session to the Shopify Remix app so it can execute fixes
+            if shopify_app_url:
+                try:
+                    import hashlib as _hashlib
+                    import hmac as _hmac
+                    import json as _json
+
+                    sync_payload = {
+                        "shop": shop_domain,
+                        "accessToken": access_token,
+                        "scope": tokens.get("scope", ""),
+                    }
+                    sync_body = _json.dumps(sync_payload).encode("utf-8")
+                    hmac_secret = os.getenv("SHOPIFY_CLIENT_SECRET", "")
+                    sync_sig = _hmac.new(hmac_secret.encode(), sync_body, _hashlib.sha256).hexdigest()
+
+                    requests.post(
+                        f"{shopify_app_url}/api/sync-session",
+                        headers={
+                            "X-Signalor-Signature": sync_sig,
+                            "X-Signalor-Shop": shop_domain,
+                            "Content-Type": "application/json",
+                        },
+                        data=sync_body,
+                        timeout=10,
+                    )
+                    logger.info("Session synced to Shopify app for %s", shop_domain)
+                except Exception as sync_exc:
+                    logger.warning("Session sync to Shopify app failed (non-fatal): %s", sync_exc)
 
             # Keep org URL in sync for GEO analysis auto-start
             primary_domain = (
@@ -1056,29 +1093,125 @@ class ShopifyDataView(APIView):
         return Response(serializer.data)
 
 
+class ShopifyLinkAppView(APIView):
+    """POST /api/integrations/shopify/link-app/ — Link the Signalor Shopify app to backend.
+
+    Called by the Shopify Remix app after install. Exchanges HMAC secret and stores
+    the app URL so the backend can send fix instructions to the app.
+
+    Body: { "shop_domain": "store.myshopify.com", "app_url": "https://...", "hmac_secret": "..." }
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        shop_domain = request.data.get("shop_domain", "").strip()
+        app_url = request.data.get("app_url", "").strip()
+        hmac_secret = request.data.get("hmac_secret", "").strip()
+
+        if not shop_domain or not app_url or not hmac_secret:
+            return Response(
+                {"error": "shop_domain, app_url, and hmac_secret are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Find the Shopify integration for this shop
+        try:
+            integration = Integration.objects.get(
+                metadata__shop_domain=shop_domain,
+                provider=Integration.Provider.SHOPIFY,
+                is_active=True,
+            )
+        except Integration.DoesNotExist:
+            return Response(
+                {"error": f"No active Shopify integration found for {shop_domain}."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Store the app URL and HMAC secret in metadata
+        meta = integration.metadata or {}
+        meta["signalor_app_url"] = app_url.rstrip("/")
+        meta["signalor_hmac_secret"] = hmac_secret
+        integration.metadata = meta
+        integration.save(update_fields=["metadata"])
+
+        return Response({
+            "status": "linked",
+            "shop_domain": shop_domain,
+            "message": "Shopify app linked. Fix instructions will now be routed through the app.",
+        })
+
+
 class WordPressConnectView(APIView):
-    """POST /api/integrations/wordpress/connect/ — WordPress.com OAuth only."""
+    """POST /api/integrations/wordpress/connect/ — Plugin API key or WordPress.com OAuth."""
 
     permission_classes = [AllowAny]
 
-    def _connect(self, request):
-        payload = request.data if request.method == "POST" else request.query_params
-        serializer = WordPressConnectSerializer(data=payload)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
+    def post(self, request):
+        payload = request.data
+        email = (payload.get("email", "") or "").lower().strip()
+        site_url = (payload.get("site_url", "") or "").strip()
+        api_key = (payload.get("api_key", "") or "").strip()
 
-        org, err = _get_org_or_400(data["email"])
+        if not email or not site_url:
+            return Response({"error": "email and site_url are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        org, err = _get_org_or_400(email)
         if err:
             return err
 
-        allowed, sub_err = integration_connect_allowed_for_email(data["email"])
+        allowed, sub_err = integration_connect_allowed_for_email(email)
         if not allowed:
-            return Response(
-                {"error": sub_err},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"error": sub_err}, status=status.HTTP_403_FORBIDDEN)
 
-        site_url = data["site_url"]
+        # ── Plugin connect (self-hosted WordPress with Signalor plugin) ──
+        if api_key:
+            # Verify the plugin is reachable
+            verify_url = f"{site_url.rstrip('/')}/wp-json/signalor/v1/status"
+            try:
+                resp = requests.get(
+                    verify_url,
+                    headers={"X-Signalor-Key": api_key},
+                    timeout=10,
+                )
+                if not resp.ok:
+                    return Response(
+                        {"error": f"Could not connect to plugin (HTTP {resp.status_code}). Check your site URL and API key."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                plugin_data = resp.json()
+            except requests.RequestException as exc:
+                return Response(
+                    {"error": f"Could not reach your site: {exc}. Make sure the Signalor GEO plugin is installed and active."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Create/update integration
+            integration, _ = Integration.objects.update_or_create(
+                organization=org,
+                provider=Integration.Provider.WORDPRESS,
+                defaults={"is_active": True},
+            )
+            integration.metadata = {
+                "site_url": site_url.rstrip("/"),
+                "site_name": plugin_data.get("name", ""),
+                "signalor_api_key": api_key,
+                "connection_type": "plugin",
+            }
+            integration.save()
+            _deactivate_other_store_integration(org, Integration.Provider.WORDPRESS)
+
+            # Sync org URL
+            if org.url != site_url:
+                org.url = site_url
+                org.save(update_fields=["url"])
+
+            return Response({
+                "status": "connected",
+                "site_name": plugin_data.get("name", ""),
+                "message": f"Connected to {plugin_data.get('name', site_url)} via Signalor plugin.",
+            })
+
+        # ── WordPress.com OAuth flow ──
         client_id = os.getenv("WPCOM_CLIENT_ID", "").strip()
         client_secret = os.getenv("WPCOM_CLIENT_SECRET", "").strip()
         redirect_uri = os.getenv("WPCOM_REDIRECT_URI", "").strip()
@@ -1091,10 +1224,10 @@ class WordPressConnectView(APIView):
         nonce = secrets.token_urlsafe(24)
         state_payload = {
             "nonce": nonce,
-            "email": data["email"],
+            "email": email,
             "site_url": site_url,
-            "return_to": (data.get("return_to") or "").strip(),
-            "frontend_base": (data.get("frontend_base") or "").strip(),
+            "return_to": (payload.get("return_to") or "").strip(),
+            "frontend_base": (payload.get("frontend_base") or "").strip(),
         }
         cache.set(f"wp_oauth_state:{nonce}", state_payload, timeout=15 * 60)
         auth_url = "https://public-api.wordpress.com/oauth2/authorize?" + urlencode(
@@ -1107,15 +1240,10 @@ class WordPressConnectView(APIView):
                 "state": _sign_state(state_payload),
             }
         )
-        return Response(
-            {
-                "oauth_url": auth_url,
-                "message": "Redirect to WordPress.com to complete OAuth.",
-            }
-        )
-
-    def post(self, request):
-        return self._connect(request)
+        return Response({
+            "oauth_url": auth_url,
+            "message": "Redirect to WordPress.com to complete OAuth.",
+        })
 
     def get(self, request):
         return self._connect(request)

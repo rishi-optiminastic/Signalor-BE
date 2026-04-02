@@ -32,10 +32,14 @@ from .views import (
     CitationTrendView,
     RecheckPromptView,
     RecheckAllPromptsView,
+    GeneratePromptsView,
     # New features
     ScoreHistoryView,
     ScheduledAnalysisView,
     AutoFixView,
+    AutoFixPreviewView,
+    AutoFixApproveView,
+    AiChatView,
     GeoImprovementsView,
     ApplyGeoFixesAndReanalyzeView,
 )
@@ -45,6 +49,7 @@ app_name = "analyzer"
 urlpatterns = [
     path("health/", HealthCheckView.as_view(), name="health-check"),
     path("analyze/", StartAnalysisView.as_view(), name="start-analysis"),
+    path("generate-prompts/", GeneratePromptsView.as_view(), name="generate-prompts"),
     path("runs/history/", ScoreHistoryView.as_view(), name="run-history"),
     path("schedule/", ScheduledAnalysisView.as_view(), name="schedule"),
     path("runs/", AnalysisRunListView.as_view(), name="run-list"),
@@ -59,6 +64,9 @@ urlpatterns = [
     path("runs/s/<str:slug>/competitors/", CompetitorListCreateView.as_view(), name="competitor-list-create"),
     path("runs/s/<str:slug>/competitors/<int:competitor_id>/", CompetitorDetailView.as_view(), name="competitor-detail"),
     path("runs/s/<str:slug>/auto-fix/", AutoFixView.as_view(), name="auto-fix"),
+    path("runs/s/<str:slug>/auto-fix/preview/", AutoFixPreviewView.as_view(), name="auto-fix-preview"),
+    path("runs/s/<str:slug>/auto-fix/approve/", AutoFixApproveView.as_view(), name="auto-fix-approve"),
+    path("runs/s/<str:slug>/chat/", AiChatView.as_view(), name="ai-chat"),
     path("runs/s/<str:slug>/", AnalysisRunBySlugView.as_view(), name="run-by-slug"),
     path("runs/<int:run_id>/status/", AnalysisRunStatusView.as_view(), name="run-status"),
     path("runs/<int:run_id>/export-pdf/", ExportPDFView.as_view(), name="export-pdf"),
