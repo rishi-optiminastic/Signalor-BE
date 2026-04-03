@@ -956,9 +956,10 @@ def generate_recommendations(
     # Cap total
     top = filtered[:MAX_RECOMMENDATIONS]
 
-    # Clean internal fields
+    # Clean internal / non-model fields before DB create()
     for rec in top:
         rec.pop("impact_score", None)
         rec.pop("_sort_score", None)
+        rec.pop("fixable", None)
 
     return top
