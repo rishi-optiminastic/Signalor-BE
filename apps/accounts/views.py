@@ -379,7 +379,7 @@ class DeleteAccountView(APIView):
         deleted_counts["analysis_runs"] = runs.count()
         runs.delete()
 
-        orgs = Organization.objects.filter(email=email)
+        orgs = Organization.objects.filter(owner_email=email)
         deleted_counts["organizations"] = orgs.count()
         orgs.delete()
 
