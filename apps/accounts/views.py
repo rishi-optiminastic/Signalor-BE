@@ -15,7 +15,8 @@ from rest_framework.views import APIView
 
 from datetime import timedelta
 
-from .models import Subscription
+from .models import Subscription, PLAN_LIMITS
+from .subscription_utils import is_internal_email
 
 logger = logging.getLogger("apps")
 
@@ -36,25 +37,35 @@ class CreateCheckoutSessionView(APIView):
     """POST /api/payments/create-checkout/"""
     permission_classes = [AllowAny]
 
+    # Map plan names to Dodo product IDs (set via env vars)
+    PLAN_PRODUCT_MAP = {
+        "starter": os.getenv("DODO_PRODUCT_ID_STARTER", os.getenv("DODO_PRODUCT_ID", "")),
+        "pro": os.getenv("DODO_PRODUCT_ID_PRO", ""),
+        "business": os.getenv("DODO_PRODUCT_ID_BUSINESS", ""),
+    }
+
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
+        plan = request.data.get("plan", "starter").lower().strip()
 
         if not email:
             return Response({"error": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if plan not in ("starter", "pro", "business"):
+            return Response({"error": "Invalid plan."}, status=status.HTTP_400_BAD_REQUEST)
 
         dodo = _get_dodo()
         if not dodo:
             return Response({"error": "Payment system not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        product_id = os.getenv("DODO_PRODUCT_ID", "")
+        product_id = self.PLAN_PRODUCT_MAP.get(plan, "")
         if not product_id:
-            return Response({"error": "Payment product not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": f"Product not configured for {plan} plan."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # Get or create subscription record
         sub, _ = Subscription.objects.get_or_create(email=email)
 
         try:
-            # Dodo handles currency automatically based on user location
             subscription = dodo.subscriptions.create(
                 customer={
                     "email": email,
@@ -64,14 +75,16 @@ class CreateCheckoutSessionView(APIView):
                 return_url=f"{FRONTEND_URL}/payments/success",
                 metadata={
                     "email": email,
+                    "plan": plan,
                 },
             )
 
-            # Store Dodo IDs
+            # Store Dodo IDs and plan
             if hasattr(subscription, "customer") and subscription.customer:
                 sub.payment_customer_id = getattr(subscription.customer, "customer_id", "") or ""
             sub.payment_subscription_id = subscription.subscription_id or ""
-            sub.save(update_fields=["payment_customer_id", "payment_subscription_id"])
+            sub.plan = plan
+            sub.save(update_fields=["payment_customer_id", "payment_subscription_id", "plan"])
 
             return Response({"checkout_url": subscription.payment_link})
         except Exception as e:
@@ -84,17 +97,24 @@ class SubscriptionStatusView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        if os.getenv("DISABLE_PAYMENT", "").lower() in ("true", "1", "yes"):
-            return Response({
-                "is_active": True,
-                "status": "active",
-                "current_period_end": None,
-                "currency": "usd",
-            })
+        starter = PLAN_LIMITS["starter"]
+        business = PLAN_LIMITS["business"]
 
         email = request.query_params.get("email", "").lower().strip()
         if not email:
             return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # @optiminastic.com → free unlimited access (business tier)
+        if is_internal_email(email):
+            return Response({
+                "is_active": True,
+                "status": "active",
+                "current_period_end": None,
+                "currency": "gbp",
+                "plan": "business",
+                "plan_label": "Business (Internal)",
+                "limits": business,
+            })
 
         try:
             sub = Subscription.objects.get(email=email)
@@ -103,13 +123,19 @@ class SubscriptionStatusView(APIView):
                 "status": sub.status,
                 "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
                 "currency": sub.currency,
+                "plan": sub.plan,
+                "plan_label": sub.limits["label"],
+                "limits": sub.limits,
             })
         except Subscription.DoesNotExist:
             return Response({
                 "is_active": False,
                 "status": "none",
                 "current_period_end": None,
-                "currency": "usd",
+                "currency": "gbp",
+                "plan": "starter",
+                "plan_label": starter["label"],
+                "limits": starter,
             })
 
 
@@ -192,6 +218,11 @@ class DodoWebhookView(APIView):
         sub.payment_customer_id = data.get("customer", {}).get("customer_id", sub.payment_customer_id)
         sub.status = "active"
 
+        # Set plan from metadata if present
+        metadata = data.get("metadata", {})
+        if isinstance(metadata, dict) and metadata.get("plan") in ("starter", "pro", "business"):
+            sub.plan = metadata["plan"]
+
         next_billing = data.get("next_billing_date")
         if next_billing:
             from dateutil.parser import parse as parse_date
@@ -200,8 +231,8 @@ class DodoWebhookView(APIView):
             except (ValueError, TypeError):
                 pass
 
-        sub.save(update_fields=["payment_subscription_id", "payment_customer_id", "status", "current_period_end"])
-        logger.info("Subscription activated for %s", email)
+        sub.save(update_fields=["payment_subscription_id", "payment_customer_id", "status", "current_period_end", "plan"])
+        logger.info("Subscription activated for %s (plan=%s)", email, sub.plan)
 
     def _handle_subscription_renewed(self, data):
         """Subscription renewed for next period."""
@@ -303,6 +334,24 @@ class DodoWebhookView(APIView):
                 pass
 
         return None
+
+
+class PlanListView(APIView):
+    """GET /api/plans/ — list all available plans."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        plans = []
+        for key, cfg in PLAN_LIMITS.items():
+            plans.append({
+                "id": key,
+                "label": cfg["label"],
+                "price_gbp": cfg["price_gbp"],
+                "max_projects": cfg["max_projects"],
+                "max_prompts": cfg["max_prompts"],
+                "engines": cfg["engines"],
+            })
+        return Response(plans)
 
 
 class TerminateAccountView(APIView):

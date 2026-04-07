@@ -1,6 +1,31 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 
+# ── Plan Limits ───────────────────────────────────────────────────────────
+PLAN_LIMITS = {
+    "starter": {
+        "label": "Starter",
+        "price_gbp": 20,
+        "max_projects": 1,
+        "max_prompts": 25,
+        "engines": ["chatgpt", "perplexity"],
+    },
+    "pro": {
+        "label": "Pro",
+        "price_gbp": 50,
+        "max_projects": 3,
+        "max_prompts": 75,
+        "engines": ["chatgpt", "gemini", "perplexity"],
+    },
+    "business": {
+        "label": "Business",
+        "price_gbp": 60,
+        "max_projects": 4,
+        "max_prompts": 200,
+        "engines": ["chatgpt", "gemini", "perplexity", "claude", "google"],
+    },
+}
+
 class UserManager(BaseUserManager):
     def create_user(self, username, email, password=None, **extra_fields):
         if not email:
@@ -45,7 +70,13 @@ class Subscription(models.Model):
         UNPAID = "unpaid"
         TRIALING = "trialing"
 
+    class Plan(models.TextChoices):
+        STARTER = "starter"
+        PRO = "pro"
+        BUSINESS = "business"
+
     email = models.EmailField(unique=True, db_index=True)
+    plan = models.CharField(max_length=20, choices=Plan.choices, default=Plan.STARTER)
     payment_customer_id = models.CharField(max_length=255, blank=True, default="")
     payment_subscription_id = models.CharField(max_length=255, blank=True, default="")
     # Keep old Stripe fields for backwards compatibility during migration
@@ -64,3 +95,7 @@ class Subscription(models.Model):
     @property
     def is_active(self):
         return self.status in ("active", "trialing")
+
+    @property
+    def limits(self):
+        return PLAN_LIMITS.get(self.plan, PLAN_LIMITS["starter"])

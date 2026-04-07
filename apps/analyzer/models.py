@@ -152,6 +152,11 @@ class Recommendation(models.Model):
     impact_estimate = models.CharField(max_length=100, blank=True, default="")
     category = models.CharField(max_length=30)
     why = models.CharField(max_length=200, blank=True, default="")
+    # Structured step-by-step guide + gamification metadata
+    steps = models.JSONField(default=list, blank=True)
+    xp_reward = models.IntegerField(default=0)
+    difficulty = models.CharField(max_length=20, blank=True, default="")  # easy, medium, hard
+    estimated_minutes = models.IntegerField(default=0)
 
     class Meta:
         ordering = ["priority", "pillar"]

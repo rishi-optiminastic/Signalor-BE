@@ -889,6 +889,541 @@ PILLAR_WHY = {
 # Set high so we always push toward 100 (especially technical)
 SUPPRESS_THRESHOLD = 95
 
+# ── Gamified Steps & Metadata ─────────────────────────────────────────────
+# Each finding maps to structured steps, XP, difficulty, and time estimate.
+# Steps are rendered as a gamified checklist on the frontend.
+
+STEP_META = {
+    # ── Content ──
+    "no_h1": {
+        "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 2,
+        "steps": [
+            {"n": 1, "title": "Find your page title", "detail": "Identify the main topic of the page — this becomes your H1.", "xp": 5},
+            {"n": 2, "title": "Add the H1 tag", "detail": "Wrap your title in <h1>Your Page Title</h1>. Place it as the first heading on the page.", "code": "<h1>Your Page Title Here</h1>", "xp": 15},
+            {"n": 3, "title": "Verify only one H1 exists", "detail": "Search your page source for '<h1' — there should be exactly one.", "xp": 10},
+        ],
+    },
+    "multiple_h1": {
+        "xp_reward": 25, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {"n": 1, "title": "Find all H1 tags", "detail": "Search your page source for '<h1'. Note every instance.", "xp": 5},
+            {"n": 2, "title": "Keep the best one", "detail": "Choose the H1 that best describes the entire page topic.", "xp": 10},
+            {"n": 3, "title": "Demote the rest to H2", "detail": "Change all other <h1> tags to <h2> or <h3> based on their importance.", "xp": 10},
+        ],
+    },
+    "broken_heading_hierarchy": {
+        "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Map your heading structure", "detail": "List all headings in order. Look for gaps (e.g., H1 → H3 skipping H2).", "xp": 10},
+            {"n": 2, "title": "Fill the gaps", "detail": "Add missing heading levels so the hierarchy flows: H1 → H2 → H3. Never skip levels.", "xp": 15},
+            {"n": 3, "title": "Test with a screen reader", "detail": "Use browser dev tools to verify the heading outline makes logical sense.", "xp": 5},
+        ],
+    },
+    "no_faq_section": {
+        "xp_reward": 60, "difficulty": "medium", "estimated_minutes": 20,
+        "steps": [
+            {"n": 1, "title": "Brainstorm 5-8 questions", "detail": "Think about what your customers ask most. Check Google's 'People Also Ask' for your topic.", "xp": 10},
+            {"n": 2, "title": "Write concise answers", "detail": "Each answer should be 2-4 sentences. Start with a direct answer, then elaborate.", "xp": 15},
+            {"n": 3, "title": "Add the FAQ HTML", "detail": "Add an FAQ section with <h2>Frequently Asked Questions</h2> followed by Q&A pairs.", "code": "<h2>Frequently Asked Questions</h2>\n<h3>What is [your topic]?</h3>\n<p>[Direct answer in 2-3 sentences]</p>", "xp": 15},
+            {"n": 4, "title": "Add FAQPage schema", "detail": "Add JSON-LD FAQPage markup so AI engines can parse your Q&As directly.", "code": '<script type="application/ld+json">\n{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Your question?","acceptedAnswer":{"@type":"Answer","text":"Your answer."}}]}\n</script>', "xp": 20},
+        ],
+    },
+    "no_lists": {
+        "xp_reward": 20, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {"n": 1, "title": "Identify list-worthy content", "detail": "Find paragraphs that list features, benefits, steps, or comparisons.", "xp": 5},
+            {"n": 2, "title": "Convert to HTML lists", "detail": "Use <ul> for unordered lists and <ol> for step-by-step sequences.", "code": "<ul>\n  <li>Feature one — description</li>\n  <li>Feature two — description</li>\n  <li>Feature three — description</li>\n</ul>", "xp": 15},
+        ],
+    },
+    "no_answer_first": {
+        "xp_reward": 40, "difficulty": "medium", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Identify the main question", "detail": "What question does someone searching for your page want answered?", "xp": 10},
+            {"n": 2, "title": "Write a 1-2 sentence direct answer", "detail": "Start with '[Topic] is...' or 'The answer is...' — no preamble.", "xp": 15},
+            {"n": 3, "title": "Place it as the first paragraph", "detail": "Move your direct answer to the very top of the content, before any background or context.", "xp": 15},
+        ],
+    },
+    "few_internal_links": {
+        "xp_reward": 25, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "List your related pages", "detail": "Find 3-5 pages on your site that relate to this page's topic.", "xp": 5},
+            {"n": 2, "title": "Add contextual links", "detail": "Link to them naturally within your content using descriptive anchor text (not 'click here').", "xp": 15},
+            {"n": 3, "title": "Check for broken links", "detail": "Click each link to verify it works and goes to the right page.", "xp": 5},
+        ],
+    },
+    "no_citations": {
+        "xp_reward": 80, "difficulty": "medium", "estimated_minutes": 25,
+        "steps": [
+            {"n": 1, "title": "Find 3-5 authoritative sources", "detail": "Search Google Scholar, industry reports, or .gov/.edu sites for data supporting your claims.", "xp": 15},
+            {"n": 2, "title": "Add inline citations", "detail": "Insert citations naturally: 'According to a 2024 McKinsey report, AI adoption grew by 72%.'", "code": "According to a <a href='https://source.com/report'>2024 McKinsey report</a>, AI adoption grew by 72% (McKinsey, 2024).", "xp": 25},
+            {"n": 3, "title": "Add a References section", "detail": "Create a 'Sources' or 'References' section at the bottom listing all cited works.", "xp": 20},
+            {"n": 4, "title": "Link to original sources", "detail": "Make each citation a clickable link to the original research or report.", "xp": 20},
+        ],
+    },
+    "no_statistics": {
+        "xp_reward": 70, "difficulty": "medium", "estimated_minutes": 20,
+        "steps": [
+            {"n": 1, "title": "Identify claimable statements", "detail": "Find sentences where you make general claims that could be backed by data.", "xp": 10},
+            {"n": 2, "title": "Research specific numbers", "detail": "Find real statistics from reports, surveys, or studies that support your points.", "xp": 20},
+            {"n": 3, "title": "Insert data points", "detail": "Replace vague claims with specific numbers: '67% of companies now use...' not 'many companies use...'", "xp": 25},
+            {"n": 4, "title": "Cite every statistic", "detail": "Always mention the source: '(Gartner, 2024)' or link to the report.", "xp": 15},
+        ],
+    },
+    "no_expert_quotes": {
+        "xp_reward": 50, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {"n": 1, "title": "Identify quotable experts", "detail": "Find 2-3 recognized experts in your field (CEOs, researchers, authors).", "xp": 10},
+            {"n": 2, "title": "Find or create quotes", "detail": "Pull quotes from interviews, books, or conference talks. Or quote your own team's experts.", "xp": 15},
+            {"n": 3, "title": "Add with proper attribution", "detail": "Use blockquote tags with the expert's name, title, and organization.", "code": '<blockquote>\n  <p>"AI will transform how small businesses compete globally."</p>\n  <cite>— Dr. Jane Smith, Head of AI Research at Stanford</cite>\n</blockquote>', "xp": 25},
+        ],
+    },
+    "weak_authoritative_tone": {
+        "xp_reward": 45, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {"n": 1, "title": "Find hedging language", "detail": "Search for words like 'might', 'maybe', 'I think', 'possibly', 'could be'. List every instance.", "xp": 10},
+            {"n": 2, "title": "Replace with confident statements", "detail": "'This might help' → 'This demonstrably improves'. Back claims with data.", "xp": 20},
+            {"n": 3, "title": "Add evidence after strong claims", "detail": "Every confident claim should have a data point or citation within the same paragraph.", "xp": 15},
+        ],
+    },
+    "poor_readability": {
+        "xp_reward": 40, "difficulty": "medium", "estimated_minutes": 20,
+        "steps": [
+            {"n": 1, "title": "Check your reading level", "detail": "Paste your content into hemingwayapp.com — aim for Grade 8-12.", "xp": 5},
+            {"n": 2, "title": "Shorten long sentences", "detail": "Break any sentence over 25 words into two. Target 15-20 words average.", "xp": 15},
+            {"n": 3, "title": "Replace jargon", "detail": "Define technical terms on first use: 'RAG (Retrieval-Augmented Generation) works like...'", "xp": 10},
+            {"n": 4, "title": "Break up long paragraphs", "detail": "No paragraph should exceed 3-4 sentences. Each paragraph = one idea.", "xp": 10},
+        ],
+    },
+    "no_technical_terms": {
+        "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "List domain terms", "detail": "Write down 5-10 technical terms specific to your industry.", "xp": 10},
+            {"n": 2, "title": "Weave them into content", "detail": "Use each term naturally, and define it on first use for accessibility.", "xp": 15},
+            {"n": 3, "title": "Balance technical and plain language", "detail": "Alternate between expert terminology and simple explanations.", "xp": 5},
+        ],
+    },
+    "low_vocabulary_diversity": {
+        "xp_reward": 25, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find repeated words", "detail": "Use Ctrl+F to find words you use more than 5 times.", "xp": 5},
+            {"n": 2, "title": "Replace with synonyms", "detail": "Swap repeated terms: 'AI' → 'artificial intelligence' → 'machine learning systems'.", "xp": 15},
+            {"n": 3, "title": "Vary sentence structure", "detail": "Mix short punchy sentences with longer explanatory ones.", "xp": 5},
+        ],
+    },
+    "low_word_count": {
+        "xp_reward": 60, "difficulty": "hard", "estimated_minutes": 45,
+        "steps": [
+            {"n": 1, "title": "Outline missing subtopics", "detail": "Research what competitors cover that you don't. List 3-5 subtopics to add.", "xp": 10},
+            {"n": 2, "title": "Expand each section", "detail": "Add examples, case studies, and data to each section. Target 1,500+ words total.", "xp": 25},
+            {"n": 3, "title": "Add an FAQ section", "detail": "Add 5-8 frequently asked questions with detailed answers.", "xp": 15},
+            {"n": 4, "title": "Add a summary/conclusion", "detail": "End with a concise summary that recaps key takeaways.", "xp": 10},
+        ],
+    },
+    "poor_paragraph_structure": {
+        "xp_reward": 20, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find long paragraphs", "detail": "Any paragraph over 80 words needs splitting.", "xp": 5},
+            {"n": 2, "title": "Split into focused chunks", "detail": "Each paragraph = one idea. 2-3 sentences, 20-80 words.", "xp": 10},
+            {"n": 3, "title": "Add topic sentences", "detail": "Start each paragraph with its main point.", "xp": 5},
+        ],
+    },
+    "keyword_stuffing": {
+        "xp_reward": 50, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {"n": 1, "title": "Find the repeated keyword", "detail": "Use Ctrl+F to find the most repeated keyword. Count occurrences.", "xp": 5},
+            {"n": 2, "title": "Remove unnatural repetitions", "detail": "Keep the keyword in title, first paragraph, and 2-3 natural mentions. Remove the rest.", "xp": 20},
+            {"n": 3, "title": "Replace with synonyms", "detail": "Use variations and related terms instead of repeating the exact same phrase.", "xp": 15},
+            {"n": 4, "title": "Read aloud test", "detail": "Read your content aloud. If any phrase sounds forced or repetitive, rewrite it.", "xp": 10},
+        ],
+    },
+
+    # ── Schema ──
+    "no_jsonld": {
+        "xp_reward": 75, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {"n": 1, "title": "Choose your schema type", "detail": "Organization for homepage, Article for blog posts, Product for product pages.", "xp": 10},
+            {"n": 2, "title": "Generate the JSON-LD", "detail": "Use the template below and fill in your details.", "code": '<script type="application/ld+json">\n{\n  "@context": "https://schema.org",\n  "@type": "Organization",\n  "name": "Your Company",\n  "url": "https://yoursite.com",\n  "logo": "https://yoursite.com/logo.png",\n  "description": "What your company does",\n  "sameAs": ["https://linkedin.com/company/you", "https://twitter.com/you"]\n}\n</script>', "xp": 30},
+            {"n": 3, "title": "Add to your page <head>", "detail": "Paste the script tag inside your <head> section, before </head>.", "xp": 20},
+            {"n": 4, "title": "Validate with Google", "detail": "Test at search.google.com/test/rich-results — fix any errors shown.", "xp": 15},
+        ],
+    },
+    "no_faqpage_schema": {
+        "xp_reward": 65, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {"n": 1, "title": "Ensure FAQ content exists", "detail": "You need visible FAQ content on the page before adding the schema.", "xp": 5},
+            {"n": 2, "title": "Build the FAQPage JSON-LD", "detail": "Create a Question/Answer pair for each FAQ item.", "code": '<script type="application/ld+json">\n{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[\n  {"@type":"Question","name":"How does X work?","acceptedAnswer":{"@type":"Answer","text":"X works by..."}},\n  {"@type":"Question","name":"What does X cost?","acceptedAnswer":{"@type":"Answer","text":"X costs..."}}\n]}\n</script>', "xp": 30},
+            {"n": 3, "title": "Add to page and validate", "detail": "Insert in <head>, then test at Google Rich Results Test.", "xp": 30},
+        ],
+    },
+    "no_article_schema": {
+        "xp_reward": 55, "difficulty": "medium", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Gather article metadata", "detail": "Collect: headline, author name, publish date, and a featured image URL.", "xp": 10},
+            {"n": 2, "title": "Build Article schema", "detail": "Use the template and fill in your article's details.", "code": '<script type="application/ld+json">\n{"@context":"https://schema.org","@type":"Article","headline":"Your Title","author":{"@type":"Person","name":"Author Name"},"datePublished":"2025-01-15","publisher":{"@type":"Organization","name":"Your Brand"},"image":"https://yoursite.com/image.jpg"}\n</script>', "xp": 25},
+            {"n": 3, "title": "Insert and validate", "detail": "Add to <head> and validate with Google Rich Results Test.", "xp": 20},
+        ],
+    },
+    "no_organization_schema": {
+        "xp_reward": 55, "difficulty": "medium", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Gather brand info", "detail": "Collect: company name, URL, logo URL, description, and social profile URLs.", "xp": 10},
+            {"n": 2, "title": "Build Organization schema", "detail": "Fill in the template with your brand details.", "code": '<script type="application/ld+json">\n{"@context":"https://schema.org","@type":"Organization","name":"Your Brand","url":"https://yoursite.com","logo":"https://yoursite.com/logo.png","sameAs":["https://linkedin.com/company/you","https://twitter.com/you"],"description":"What you do"}\n</script>', "xp": 25},
+            {"n": 3, "title": "Add to homepage <head>", "detail": "This should be on your homepage at minimum. Validate with Google.", "xp": 20},
+        ],
+    },
+    "invalid_jsonld_structure": {
+        "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {"n": 1, "title": "Find your JSON-LD blocks", "detail": "Search page source for 'application/ld+json'.", "xp": 5},
+            {"n": 2, "title": "Add missing @context", "detail": 'Ensure every JSON-LD block starts with "@context": "https://schema.org".', "xp": 15},
+            {"n": 3, "title": "Validate JSON syntax", "detail": "Paste into jsonlint.com to check for syntax errors (missing commas, brackets).", "xp": 10},
+        ],
+    },
+    "incomplete_article_schema": {
+        "xp_reward": 35, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find your Article schema", "detail": "Search source for '@type.*Article' and locate the JSON-LD block.", "xp": 5},
+            {"n": 2, "title": "Add missing fields", "detail": "Ensure headline, author (Person with name), datePublished (ISO format), and publisher exist.", "xp": 20},
+            {"n": 3, "title": "Validate", "detail": "Test at Google Rich Results Test and fix any warnings.", "xp": 10},
+        ],
+    },
+    "incomplete_organization_schema": {
+        "xp_reward": 35, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find your Organization schema", "detail": "Search source for '@type.*Organization'.", "xp": 5},
+            {"n": 2, "title": "Add logo, sameAs, description", "detail": "Add logo URL, social profile URLs in sameAs array, and a company description.", "xp": 20},
+            {"n": 3, "title": "Add contactPoint", "detail": 'Add: "contactPoint": {"@type": "ContactPoint", "telephone": "+1-xxx", "contactType": "customer service"}', "xp": 10},
+        ],
+    },
+    "incomplete_faqpage_schema": {
+        "xp_reward": 35, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find your FAQPage schema", "detail": "Search source for '@type.*FAQPage'.", "xp": 5},
+            {"n": 2, "title": "Add mainEntity array", "detail": "Add Question/Answer pairs matching your visible FAQ content.", "xp": 25},
+            {"n": 3, "title": "Validate", "detail": "Test at Google Rich Results Test.", "xp": 5},
+        ],
+    },
+    "incomplete_product_schema": {
+        "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find your Product schema", "detail": "Search source for '@type.*Product'.", "xp": 5},
+            {"n": 2, "title": "Add missing properties", "detail": "Add description, image, offers (with price/currency), brand, and aggregateRating.", "xp": 20},
+            {"n": 3, "title": "Validate", "detail": "Test at Google Rich Results Test.", "xp": 5},
+        ],
+    },
+    "incomplete_blogposting_schema": {
+        "xp_reward": 35, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find your BlogPosting schema", "detail": "Search source for '@type.*BlogPosting'.", "xp": 5},
+            {"n": 2, "title": "Add headline, author, dates", "detail": "Add headline, author (Person), datePublished, and optionally image and publisher.", "xp": 25},
+            {"n": 3, "title": "Validate", "detail": "Test at Google Rich Results Test.", "xp": 5},
+        ],
+    },
+    "incomplete_newsarticle_schema": {
+        "xp_reward": 35, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find your NewsArticle schema", "detail": "Search source for '@type.*NewsArticle'.", "xp": 5},
+            {"n": 2, "title": "Add required properties", "detail": "Add headline, author, datePublished, and publisher with name and logo.", "xp": 25},
+            {"n": 3, "title": "Validate", "detail": "Test at Google Rich Results Test.", "xp": 5},
+        ],
+    },
+    "incomplete_howto_schema": {
+        "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Find your HowTo schema", "detail": "Search source for '@type.*HowTo'.", "xp": 5},
+            {"n": 2, "title": "Add step array", "detail": 'Add "step" with HowToStep items matching your visible instructions.', "xp": 20},
+            {"n": 3, "title": "Validate", "detail": "Test at Google Rich Results Test.", "xp": 5},
+        ],
+    },
+
+    # ── E-E-A-T ──
+    "no_author": {
+        "xp_reward": 60, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {"n": 1, "title": "Add visible author byline", "detail": "Add your name and title below the page title.", "code": '<p class="author">By <strong>Your Name</strong>, Your Title at Your Brand</p>', "xp": 15},
+            {"n": 2, "title": "Add author meta tag", "detail": "Add to your page <head> section.", "code": '<meta name="author" content="Your Name">', "xp": 15},
+            {"n": 3, "title": "Add to Article schema", "detail": "If you have Article/BlogPosting schema, add the author property.", "code": '"author": {"@type": "Person", "name": "Your Name", "jobTitle": "Your Title", "url": "https://yoursite.com/about"}', "xp": 20},
+            {"n": 4, "title": "Use your real identity", "detail": "AI cross-references author names across the web. Use your real name for maximum E-E-A-T.", "xp": 10},
+        ],
+    },
+    "no_author_bio": {
+        "xp_reward": 50, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Write a 2-3 sentence bio", "detail": "Include: name, role, years of experience, key credential, and a link to LinkedIn.", "xp": 15},
+            {"n": 2, "title": "Add the bio section", "detail": "Place it at the bottom of your article, before comments.", "code": '<div class="author-bio">\n  <img src="/images/author.jpg" alt="Name" width="64" height="64">\n  <div>\n    <strong>Your Name</strong>\n    <p>Your Name is a [title] with [X] years in [field]. They have [credential]. <a href="https://linkedin.com/in/you">LinkedIn</a></p>\n  </div>\n</div>', "xp": 25},
+            {"n": 3, "title": "Add a profile photo", "detail": "A real photo builds trust. Avoid stock images or avatars.", "xp": 10},
+        ],
+    },
+    "no_publish_date": {
+        "xp_reward": 20, "difficulty": "easy", "estimated_minutes": 2,
+        "steps": [
+            {"n": 1, "title": "Add visible date", "detail": "Show the publish date near the title or author byline.", "code": '<time datetime="2025-01-15">January 15, 2025</time>', "xp": 10},
+            {"n": 2, "title": "Add meta tag", "detail": "Add article:published_time to your <head>.", "code": '<meta property="article:published_time" content="2025-01-15T00:00:00Z">', "xp": 10},
+        ],
+    },
+    "no_updated_date": {
+        "xp_reward": 15, "difficulty": "easy", "estimated_minutes": 2,
+        "steps": [
+            {"n": 1, "title": "Add visible update date", "detail": "Show 'Last updated: [date]' near the publish date.", "xp": 5},
+            {"n": 2, "title": "Add meta tag", "detail": "Add article:modified_time to <head>.", "code": '<meta property="article:modified_time" content="2025-06-01T00:00:00Z">', "xp": 10},
+        ],
+    },
+    "few_external_citations": {
+        "xp_reward": 55, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {"n": 1, "title": "Identify unsupported claims", "detail": "Find statements in your content that make claims without linking to sources.", "xp": 10},
+            {"n": 2, "title": "Find authoritative sources", "detail": "Search Google Scholar, .gov, .edu sites for supporting evidence.", "xp": 20},
+            {"n": 3, "title": "Add 3+ external links", "detail": "Link to the sources inline, using descriptive anchor text.", "xp": 25},
+        ],
+    },
+    "no_trust_links": {
+        "xp_reward": 50, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {"n": 1, "title": "Find high-authority sources", "detail": "Search for .gov, .edu, Wikipedia, or major publications that support your claims.", "xp": 15},
+            {"n": 2, "title": "Link to them in your content", "detail": "Add 2-3 links to authoritative domains within your article body.", "xp": 25},
+            {"n": 3, "title": "Use descriptive anchor text", "detail": "Link text should describe the source: 'according to the FDA guidelines' not 'click here'.", "xp": 10},
+        ],
+    },
+    "low_source_diversity": {
+        "xp_reward": 25, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Audit your external links", "detail": "List all domains you link to. Are there fewer than 3 unique domains?", "xp": 5},
+            {"n": 2, "title": "Add links to new domains", "detail": "Find 2-3 additional authoritative sources from different domains.", "xp": 20},
+        ],
+    },
+    "no_about_page": {
+        "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {"n": 1, "title": "Create or find your About page", "detail": "Your site should have /about with team info, mission, and history.", "xp": 10},
+            {"n": 2, "title": "Link to it from this page", "detail": "Add a link to your About page in the footer or navigation visible on this page.", "xp": 15},
+            {"n": 3, "title": "Mention team credentials", "detail": "The About page should list team members with titles and qualifications.", "xp": 5},
+        ],
+    },
+    "no_first_hand_experience": {
+        "xp_reward": 70, "difficulty": "hard", "estimated_minutes": 30,
+        "steps": [
+            {"n": 1, "title": "Add experience phrases", "detail": "Insert first-person experience signals: 'In our testing of 50+ tools...', 'After implementing for 6 months...'", "xp": 15},
+            {"n": 2, "title": "Add a case study section", "detail": "Include specific numbers: 'Client X saw a 45% increase in...' with before/after data.", "xp": 25},
+            {"n": 3, "title": "Add a 'Why Trust This' box", "detail": "Add a prominent trust box explaining your authority on this topic.", "code": '<div class="trust-box">\n  <strong>Why trust this guide?</strong>\n  <p>Based on [X years] of experience and [Y] real implementations. Every recommendation is tested on live projects.</p>\n</div>', "xp": 20},
+            {"n": 4, "title": "Include original data or screenshots", "detail": "Screenshots, data tables, and 'lessons learned' are the strongest experience signals.", "xp": 10},
+        ],
+    },
+    "no_expertise_indicators": {
+        "xp_reward": 45, "difficulty": "medium", "estimated_minutes": 20,
+        "steps": [
+            {"n": 1, "title": "Add 'why' explanations", "detail": "Don't just say what to do — explain WHY it works. This signals deep knowledge.", "xp": 15},
+            {"n": 2, "title": "Include pro tips", "detail": "Add expert-level tips that show insider knowledge: 'Most people miss this, but...'", "xp": 15},
+            {"n": 3, "title": "Address common mistakes", "detail": "Add a 'Common Mistakes' section showing you know the pitfalls.", "xp": 15},
+        ],
+    },
+    "low_authority": {
+        "xp_reward": 60, "difficulty": "hard", "estimated_minutes": 30,
+        "steps": [
+            {"n": 1, "title": "Add data and statistics", "detail": "Reference industry reports, surveys, and research throughout.", "xp": 15},
+            {"n": 2, "title": "Cite industry standards", "detail": "Reference frameworks, standards, or methodologies relevant to your topic.", "xp": 15},
+            {"n": 3, "title": "Mention recognitions", "detail": "If you have awards, certifications, or partnerships — mention them.", "xp": 15},
+            {"n": 4, "title": "Use authoritative tone", "detail": "Write with confidence backed by evidence. Avoid hedging words.", "xp": 15},
+        ],
+    },
+    "low_trust_signals": {
+        "xp_reward": 55, "difficulty": "medium", "estimated_minutes": 20,
+        "steps": [
+            {"n": 1, "title": "Add editorial policy", "detail": "Create a page explaining your content standards and fact-checking process.", "xp": 15},
+            {"n": 2, "title": "Add disclosure statements", "detail": "If applicable, add affiliate disclosures or conflict of interest statements.", "xp": 10},
+            {"n": 3, "title": "Add contact information", "detail": "Visible contact info (email, phone, address) signals legitimacy.", "xp": 15},
+            {"n": 4, "title": "Source all claims", "detail": "Every factual claim should have a link or citation to its source.", "xp": 15},
+        ],
+    },
+
+    # ── Technical ──
+    "no_llms_txt": {
+        "xp_reward": 75, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {"n": 1, "title": "Create the file", "detail": "Create a file called llms.txt at your website root.", "xp": 10},
+            {"n": 2, "title": "Add your content", "detail": "Use this template — customize with your brand info.", "code": "# Your Brand Name\n\n## About\nOne paragraph about what your company does.\n\n## Key Pages\n- Homepage: https://yoursite.com/\n- About: https://yoursite.com/about\n- Products: https://yoursite.com/products\n- Blog: https://yoursite.com/blog\n\n## Contact\n- Email: hello@yoursite.com\n- Twitter: @yourbrand", "xp": 30},
+            {"n": 3, "title": "Upload to your server", "detail": "Upload so it's accessible at https://yoursite.com/llms.txt", "xp": 20},
+            {"n": 4, "title": "Verify it's live", "detail": "Open https://yoursite.com/llms.txt in your browser — it should show as plain text.", "xp": 15},
+        ],
+    },
+    "ai_bots_blocked": {
+        "xp_reward": 80, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {"n": 1, "title": "Open robots.txt", "detail": "Go to https://yoursite.com/robots.txt and review the contents.", "xp": 5},
+            {"n": 2, "title": "Add AI crawler rules", "detail": "Add allow rules for all major AI crawlers.", "code": "User-agent: GPTBot\nAllow: /\n\nUser-agent: Google-Extended\nAllow: /\n\nUser-agent: anthropic-ai\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n\nUser-agent: PerplexityBot\nAllow: /", "xp": 35},
+            {"n": 3, "title": "Remove blocking rules", "detail": "Find and remove any Disallow rules targeting these bot names.", "xp": 20},
+            {"n": 4, "title": "Check your CDN/WAF", "detail": "If using Cloudflare, check Security > Bots to ensure AI bots aren't blocked at the WAF level.", "xp": 20},
+        ],
+    },
+    "no_sitemap": {
+        "xp_reward": 35, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Generate a sitemap", "detail": "Most CMS platforms (WordPress, Shopify) auto-generate sitemaps. Check /sitemap.xml.", "xp": 10},
+            {"n": 2, "title": "Verify it lists your pages", "detail": "Open the sitemap and confirm your important pages are included.", "xp": 10},
+            {"n": 3, "title": "Submit to Google Search Console", "detail": "Go to Search Console > Sitemaps > submit your sitemap URL.", "xp": 15},
+        ],
+    },
+    "crawl_failed": {
+        "xp_reward": 90, "difficulty": "hard", "estimated_minutes": 30,
+        "steps": [
+            {"n": 1, "title": "Check HTTP status", "detail": "Visit your page — does it return 200 OK? Check with: curl -I your-url", "xp": 15},
+            {"n": 2, "title": "Check bot blocking", "detail": "Your server may block non-browser user agents. Test with: curl -A 'Mozilla/5.0' your-url", "xp": 25},
+            {"n": 3, "title": "Check firewall/CDN", "detail": "If using Cloudflare or AWS WAF, check if bot protection is blocking crawlers.", "xp": 25},
+            {"n": 4, "title": "Check robots.txt", "detail": "Verify robots.txt isn't blocking the page path.", "xp": 15},
+            {"n": 5, "title": "Re-run analysis", "detail": "After fixing, re-run the analysis to verify the crawler can access your page.", "xp": 10},
+        ],
+    },
+    "meta_noindex": {
+        "xp_reward": 40, "difficulty": "easy", "estimated_minutes": 2,
+        "steps": [
+            {"n": 1, "title": "Find the noindex tag", "detail": 'Search your page source for \'noindex\'. It might be in a <meta> tag or HTTP header.', "xp": 10},
+            {"n": 2, "title": "Remove or change it", "detail": 'Change content="noindex" to content="index, follow" or remove the tag entirely.', "xp": 25},
+            {"n": 3, "title": "Check for header-level noindex", "detail": "Some servers send X-Robots-Tag: noindex as an HTTP header. Check server config too.", "xp": 5},
+        ],
+    },
+    "no_https": {
+        "xp_reward": 35, "difficulty": "medium", "estimated_minutes": 30,
+        "steps": [
+            {"n": 1, "title": "Get an SSL certificate", "detail": "Use Let's Encrypt (free) or your hosting provider's SSL option.", "xp": 10},
+            {"n": 2, "title": "Install the certificate", "detail": "Follow your hosting provider's instructions to install and activate SSL.", "xp": 15},
+            {"n": 3, "title": "Redirect HTTP to HTTPS", "detail": "Set up a 301 redirect so all HTTP URLs redirect to HTTPS.", "xp": 10},
+        ],
+    },
+    "slow_load_time": {
+        "xp_reward": 50, "difficulty": "hard", "estimated_minutes": 45,
+        "steps": [
+            {"n": 1, "title": "Run PageSpeed Insights", "detail": "Test at pagespeed.web.dev — note the top issues.", "xp": 5},
+            {"n": 2, "title": "Optimize images", "detail": "Compress images, use WebP format, and add width/height attributes.", "xp": 15},
+            {"n": 3, "title": "Enable compression", "detail": "Enable Gzip/Brotli compression on your server.", "xp": 10},
+            {"n": 4, "title": "Use a CDN", "detail": "Cloudflare (free tier) can dramatically improve load times globally.", "xp": 10},
+            {"n": 5, "title": "Minimize JavaScript", "detail": "Defer non-critical JS and remove unused scripts.", "xp": 10},
+        ],
+    },
+    "no_viewport": {
+        "xp_reward": 20, "difficulty": "easy", "estimated_minutes": 1,
+        "steps": [
+            {"n": 1, "title": "Add viewport meta tag", "detail": "Add to your <head> section.", "code": '<meta name="viewport" content="width=device-width, initial-scale=1">', "xp": 15},
+            {"n": 2, "title": "Test on mobile", "detail": "Open your page on a phone or use browser dev tools mobile view.", "xp": 5},
+        ],
+    },
+    "no_canonical": {
+        "xp_reward": 25, "difficulty": "easy", "estimated_minutes": 2,
+        "steps": [
+            {"n": 1, "title": "Determine the canonical URL", "detail": "This is the preferred version of your page URL (no query params, consistent www/non-www).", "xp": 5},
+            {"n": 2, "title": "Add canonical tag", "detail": "Add to your <head> section.", "code": '<link rel="canonical" href="https://yoursite.com/your-page-url">', "xp": 15},
+            {"n": 3, "title": "Verify consistency", "detail": "Ensure the canonical URL matches the actual URL of the page.", "xp": 5},
+        ],
+    },
+
+    # ── Entity ──
+    "brand_not_in_ai": {
+        "xp_reward": 100, "difficulty": "hard", "estimated_minutes": 120,
+        "steps": [
+            {"n": 1, "title": "Get listed on directories", "detail": "Submit to Product Hunt, G2, Capterra, Crunchbase, and AlternativeTo.", "xp": 25},
+            {"n": 2, "title": "Create comparison content", "detail": "Write blog posts: '[Your Brand] vs [Competitor]'. AI models heavily cite comparison content.", "xp": 25},
+            {"n": 3, "title": "Get press mentions", "detail": "Submit to HARO, contribute guest posts, issue press releases for milestones.", "xp": 25},
+            {"n": 4, "title": "Post on Reddit and Medium", "detail": "Create valuable content mentioning your brand on both platforms.", "xp": 25},
+        ],
+    },
+    "no_social_profiles": {
+        "xp_reward": 40, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Add social links to footer", "detail": "Add LinkedIn, Twitter/X, and GitHub links to your page footer.", "code": '<a href="https://linkedin.com/company/yourbrand" rel="me">LinkedIn</a>\n<a href="https://twitter.com/yourbrand" rel="me">Twitter</a>', "xp": 15},
+            {"n": 2, "title": "Add sameAs to schema", "detail": "Add social URLs to your Organization schema's sameAs array.", "code": '"sameAs": [\n  "https://linkedin.com/company/yourbrand",\n  "https://twitter.com/yourbrand"\n]', "xp": 20},
+            {"n": 3, "title": "Ensure profiles are active", "detail": "Inactive profiles hurt more than help. Post at least monthly.", "xp": 5},
+        ],
+    },
+    "no_wikipedia_presence": {
+        "xp_reward": 100, "difficulty": "hard", "estimated_minutes": 180,
+        "steps": [
+            {"n": 1, "title": "Build notability first", "detail": "Get featured in 3+ independent reliable sources (news, industry publications).", "xp": 25},
+            {"n": 2, "title": "Create a Wikidata entry", "detail": "Wikidata is easier than Wikipedia and still indexed by AI. Create an entry at wikidata.org.", "xp": 25},
+            {"n": 3, "title": "Get on Crunchbase & LinkedIn", "detail": "These are cited by AI as Wikipedia alternatives.", "xp": 20},
+            {"n": 4, "title": "Request Wikipedia creation", "detail": "Once you have 3+ independent sources, submit to Articles for Creation. Don't write it yourself.", "xp": 30},
+        ],
+    },
+    "no_reddit_presence": {
+        "xp_reward": 60, "difficulty": "medium", "estimated_minutes": 30,
+        "steps": [
+            {"n": 1, "title": "Find relevant subreddits", "detail": "Search reddit.com for your industry keywords. Join 3-5 subreddits.", "xp": 10},
+            {"n": 2, "title": "Create a valuable post", "detail": "Title: 'How we solved [problem] — lessons learned'. Share real data, not promotion.", "xp": 25},
+            {"n": 3, "title": "Engage with comments", "detail": "Reply to every comment within 24 hours. Add more context when asked.", "xp": 15},
+            {"n": 4, "title": "Answer existing questions", "detail": "Find threads where your expertise is relevant and provide helpful answers.", "xp": 10},
+        ],
+    },
+    "no_medium_presence": {
+        "xp_reward": 55, "difficulty": "medium", "estimated_minutes": 45,
+        "steps": [
+            {"n": 1, "title": "Create Medium account", "detail": "Use your real name + company title. Write a bio mentioning your brand.", "xp": 10},
+            {"n": 2, "title": "Write a high-value article", "detail": "Title: '[Year] Guide to [Your Topic]'. Include stats, citations, and data.", "xp": 20},
+            {"n": 3, "title": "Submit to a publication", "detail": "Submit to 'The Startup', 'Better Programming', or your niche's top publication.", "xp": 15},
+            {"n": 4, "title": "Cross-link both ways", "detail": "Link from Medium → your site AND your site → Medium article.", "xp": 10},
+        ],
+    },
+
+    # ── AI Visibility ──
+    "not_in_google_ai": {
+        "xp_reward": 65, "difficulty": "hard", "estimated_minutes": 60,
+        "steps": [
+            {"n": 1, "title": "Optimize for featured snippets", "detail": "Structure content as Q&A: question in H2, direct answer immediately below.", "xp": 20},
+            {"n": 2, "title": "Target 'People Also Ask'", "detail": "Search your keywords on Google, note PAA questions, create content answering each.", "xp": 20},
+            {"n": 3, "title": "Build topical authority", "detail": "Create a content cluster: 1 pillar page + 5-10 supporting articles, interlinked.", "xp": 25},
+        ],
+    },
+    "no_reddit_ai_presence": {
+        "xp_reward": 55, "difficulty": "medium", "estimated_minutes": 30,
+        "steps": [
+            {"n": 1, "title": "Join relevant subreddits", "detail": "Find 3-5 subreddits where your audience hangs out. Lurk 1 week first.", "xp": 10},
+            {"n": 2, "title": "Start contributing value", "detail": "Answer questions with genuine expertise. Build karma and reputation.", "xp": 15},
+            {"n": 3, "title": "Create a showcase post", "detail": "Share genuine data: 'How we solved [problem] — lessons learned'.", "xp": 20},
+            {"n": 4, "title": "Maintain weekly presence", "detail": "Comment on relevant threads weekly. AI re-indexes Reddit frequently.", "xp": 10},
+        ],
+    },
+    "no_medium_ai_presence": {
+        "xp_reward": 50, "difficulty": "medium", "estimated_minutes": 45,
+        "steps": [
+            {"n": 1, "title": "Create your profile", "detail": "Use real name + credentials. Bio should establish expertise.", "xp": 10},
+            {"n": 2, "title": "Publish your first article", "detail": "Include statistics, citations, expert insights. Mention brand 2-3 times naturally.", "xp": 20},
+            {"n": 3, "title": "Submit to a publication", "detail": "Publications multiply reach 5-10x.", "xp": 10},
+            {"n": 4, "title": "Cross-link for AI impact", "detail": "Link Medium → your site. Link your site → Medium. Add to social profiles.", "xp": 10},
+        ],
+    },
+    "weak_brand_site": {
+        "xp_reward": 45, "difficulty": "medium", "estimated_minutes": 60,
+        "steps": [
+            {"n": 1, "title": "Add essential pages", "detail": "Ensure you have: /about, /contact, /blog, privacy policy, and terms of service.", "xp": 15},
+            {"n": 2, "title": "Add footer links", "detail": "Social profiles, About, Contact, Blog, Privacy, and Terms in your footer.", "xp": 10},
+            {"n": 3, "title": "Ensure content depth", "detail": "Homepage should have 800+ words: what you do, who you serve, testimonials.", "xp": 20},
+        ],
+    },
+
+    # ── Crawl failures ──
+    "crawl_blocked_403": {
+        "xp_reward": 85, "difficulty": "hard", "estimated_minutes": 30,
+        "steps": [
+            {"n": 1, "title": "Check your firewall/CDN", "detail": "If using Cloudflare or AWS WAF, check if bot protection is too aggressive.", "xp": 25},
+            {"n": 2, "title": "Add bot allow rules", "detail": "Add specific allow rules for GPTBot, ClaudeBot, PerplexityBot in your WAF settings.", "xp": 35},
+            {"n": 3, "title": "Test with curl", "detail": "Run: curl -I -A 'GPTBot' your-url — should return 200, not 403.", "xp": 25},
+        ],
+    },
+    "crawl_timeout": {
+        "xp_reward": 80, "difficulty": "hard", "estimated_minutes": 45,
+        "steps": [
+            {"n": 1, "title": "Check server response time", "detail": "Use pagespeed.web.dev or curl -w '%{time_total}' your-url. Aim for <3 seconds.", "xp": 15},
+            {"n": 2, "title": "Upgrade hosting if needed", "detail": "Shared hosting often can't handle crawler traffic. Consider VPS or CDN.", "xp": 25},
+            {"n": 3, "title": "Enable caching", "detail": "Server-side caching (Redis, Varnish) and CDN caching dramatically reduce response time.", "xp": 25},
+            {"n": 4, "title": "Optimize database queries", "detail": "Slow DB queries are the #1 cause of timeout. Check your CMS for slow queries.", "xp": 15},
+        ],
+    },
+}
+
+
+def _default_xp(priority: str) -> int:
+    return {"critical": 80, "high": 50, "medium": 30, "low": 15}.get(priority, 20)
+
+
+def _default_difficulty(priority: str) -> str:
+    return {"critical": "hard", "high": "medium", "medium": "easy", "low": "easy"}.get(priority, "medium")
+
 
 def generate_recommendations(
     pillar_details: dict[str, dict],
@@ -937,6 +1472,13 @@ def generate_recommendations(
 
                 # Add "why this matters"
                 rec["why"] = PILLAR_WHY.get(pillar, "")
+
+                # Add gamified steps metadata
+                meta = STEP_META.get(finding, {})
+                rec["steps"] = meta.get("steps", [])
+                rec["xp_reward"] = meta.get("xp_reward", _default_xp(rec["priority"]))
+                rec["difficulty"] = meta.get("difficulty", _default_difficulty(rec["priority"]))
+                rec["estimated_minutes"] = meta.get("estimated_minutes", 10)
 
                 candidates.append(rec)
 

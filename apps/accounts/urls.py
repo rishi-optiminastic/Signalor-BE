@@ -4,6 +4,7 @@ from .views import (
     CreateCheckoutSessionView,
     SubscriptionStatusView,
     DodoWebhookView,
+    PlanListView,
     TerminateAccountView,
     CancelTerminationView,
     DeleteAccountView,
@@ -12,6 +13,7 @@ from .views import (
 app_name = "accounts"
 
 urlpatterns = [
+    path("plans/", PlanListView.as_view(), name="plan-list"),
     path("payments/create-checkout/", CreateCheckoutSessionView.as_view(), name="create-checkout"),
     path("payments/status/", SubscriptionStatusView.as_view(), name="subscription-status"),
     path("payments/webhook/", DodoWebhookView.as_view(), name="dodo-webhook"),

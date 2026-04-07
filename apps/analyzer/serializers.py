@@ -27,6 +27,7 @@ class RecommendationSerializer(serializers.ModelSerializer):
         fields = [
             "id", "pillar", "priority", "title", "description",
             "action", "impact_estimate", "category", "can_auto_fix", "why",
+            "steps", "xp_reward", "difficulty", "estimated_minutes",
         ]
 
     # Title keywords that indicate manual-only recommendations
