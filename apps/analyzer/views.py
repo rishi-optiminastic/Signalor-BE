@@ -638,7 +638,13 @@ class StartAnalysisView(APIView):
         serializer = StartAnalysisSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        data = serializer.validated_data
+        data = dict(serializer.validated_data)
+        verify_workspace = data.pop("verify_org_workspace", False)
+        cleaned_prompts = data.pop("_cleaned_prompts", None)
+        if cleaned_prompts is None:
+            cleaned_prompts = []
+        data.pop("prompts", None)
+
         email = data.get("email", "")
         org_id = data.get("org_id")
 
@@ -704,6 +710,7 @@ class StartAnalysisView(APIView):
             email=email,
             run_type=data["run_type"],
             status=AnalysisRun.Status.PENDING,
+            onboarding_prompts=list(cleaned_prompts) if verify_workspace else [],
         )
 
         # Start background task

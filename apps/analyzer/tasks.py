@@ -104,8 +104,13 @@ def _save_probes_and_tracks(
     else:
         gen_count = 10
 
+    stored = list(run.onboarding_prompts or []) if getattr(run, "onboarding_prompts", None) else []
+    stored = [p.strip() for p in stored if isinstance(p, str) and p.strip()]
+
     if gen_count == 0:
         brand_prompts = []
+    elif stored:
+        brand_prompts = stored[:gen_count]
     else:
         try:
             brand_prompts = generate_brand_prompts(

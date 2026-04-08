@@ -43,6 +43,8 @@ class AnalysisRun(models.Model):
     composite_score = models.FloatField(null=True, blank=True)
     content_hash = models.CharField(max_length=64, blank=True, default="")
     error_message = models.TextField(blank=True, default="")
+    # User-selected prompts from verified onboarding / post-checkout launch (empty for other flows)
+    onboarding_prompts = models.JSONField(default=list, blank=True)
     llm_logs = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
