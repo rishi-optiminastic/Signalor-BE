@@ -777,6 +777,225 @@ RECOMMENDATION_RULES = {
         "impact_estimate": "Critical — slow sites get skipped by AI crawlers",
         "category": "technical",
     },
+
+    # ── D2C / E-Commerce Specific ─────────────────────────────────────────
+
+    "no_product_schema": {
+        "pillar": "schema",
+        "priority": "critical",
+        "title": "Add Product Schema with Price & Availability",
+        "description": "No Product schema found on what appears to be a product page. AI shopping assistants (ChatGPT, Gemini, Perplexity) rely on Product schema to recommend products. Without it, your products are invisible to AI-powered shopping.",
+        "action": 'Add Product schema with name, description, image, price, availability, brand, and reviews. Example:\n{"@type":"Product","name":"Your Product","description":"...","image":"...","offers":{"@type":"Offer","price":"29.99","priceCurrency":"GBP","availability":"https://schema.org/InStock"},"brand":{"@type":"Brand","name":"Your Brand"},"aggregateRating":{"@type":"AggregateRating","ratingValue":"4.8","reviewCount":"124"}}',
+        "impact_estimate": "Could improve your score by ~20 points — critical for D2C brands",
+        "category": "schema",
+    },
+    "no_review_schema": {
+        "pillar": "schema",
+        "priority": "high",
+        "title": "Add Review / Rating Schema",
+        "description": "No AggregateRating or Review schema found. AI assistants prioritize products with visible ratings. '4.8 stars from 200+ reviews' is exactly the kind of data AI cites when recommending products.",
+        "action": 'Add AggregateRating to your Product schema:\n"aggregateRating": {"@type": "AggregateRating", "ratingValue": "4.8", "bestRating": "5", "reviewCount": "203"}\nAlso add individual Review entries for your best reviews.',
+        "impact_estimate": "Could improve your score by ~10 points",
+        "category": "schema",
+    },
+    "no_breadcrumb_schema": {
+        "pillar": "schema",
+        "priority": "medium",
+        "title": "Add BreadcrumbList Schema",
+        "description": "No breadcrumb schema found. Breadcrumbs help AI understand your site hierarchy — Home > Category > Product. This improves how AI navigates and recommends pages from your site.",
+        "action": 'Add BreadcrumbList schema:\n{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://yoursite.com"},{"@type":"ListItem","position":2,"name":"Category","item":"https://yoursite.com/category"},{"@type":"ListItem","position":3,"name":"Product Name"}]}',
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "schema",
+    },
+    "no_shipping_info": {
+        "pillar": "content",
+        "priority": "high",
+        "title": "Add Shipping & Delivery Information",
+        "description": "No shipping or delivery details found. AI shopping assistants always check for shipping info before recommending products. 'Free shipping over £50' or '2-day delivery' are key signals.",
+        "action": "Add a visible shipping section on your product pages and a dedicated /shipping page. Include: delivery timeframes, free shipping thresholds, international availability, and return window.",
+        "impact_estimate": "Could improve your score by ~8 points — AI assistants cite shipping details",
+        "category": "content",
+    },
+    "no_returns_policy": {
+        "pillar": "eeat",
+        "priority": "high",
+        "title": "Add Returns & Refund Policy",
+        "description": "No returns/refund policy found. AI engines check for return policies as a trust signal before recommending D2C brands. A clear returns policy = higher trust = more AI citations.",
+        "action": "Create a /returns or /refund-policy page. Include: return window (e.g., 30 days), conditions, refund process, and contact method. Link it from your footer and product pages.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "eeat",
+    },
+    "no_customer_reviews": {
+        "pillar": "eeat",
+        "priority": "critical",
+        "title": "Add Customer Reviews / Testimonials",
+        "description": "No customer reviews or testimonials detected. AI models heavily weight social proof when recommending D2C brands. Pages with real customer reviews are cited 3x more by AI assistants.",
+        "action": "STEP 1 — Add 5-10 real customer reviews to your page with name, date, and star rating.\nSTEP 2 — Use a reviews widget (Judge.me, Trustpilot, Yotpo) or add them manually.\nSTEP 3 — Add Review schema markup for each review.\nSTEP 4 — Include specific details: 'This moisturizer cleared my acne in 2 weeks' is better than 'Great product!'",
+        "impact_estimate": "Could improve your score by ~15 points — strongest D2C trust signal",
+        "category": "eeat",
+    },
+    "no_brand_story": {
+        "pillar": "eeat",
+        "priority": "high",
+        "title": "Add Brand Story / Origin Content",
+        "description": "No brand story or 'About Us' narrative found. AI engines distinguish brands by their story. 'Founded in 2020 by two dermatologists who...' creates a memorable identity that AI cites.",
+        "action": "Add a compelling About section with: founding story, mission, team credentials, what makes you different, and specific numbers ('helped 50,000+ customers').",
+        "impact_estimate": "Could improve your score by ~8 points",
+        "category": "eeat",
+    },
+    "no_comparison_content": {
+        "pillar": "content",
+        "priority": "high",
+        "title": "Create 'Brand vs Competitor' Comparison Content",
+        "description": "No comparison content found. AI assistants heavily cite comparison pages when users ask 'What's the best X?' or 'Brand A vs Brand B'. D2C brands with comparison content appear in AI results 40% more.",
+        "action": "STEP 1 — Create a comparison page: '[Your Brand] vs [Top Competitor]'.\nSTEP 2 — Include a feature comparison table with checkmarks.\nSTEP 3 — Be honest — acknowledge competitor strengths while highlighting your advantages.\nSTEP 4 — Add specific data: pricing, ingredients, ratings, delivery speed.",
+        "impact_estimate": "Could improve your AI visibility by ~12 points",
+        "category": "content",
+    },
+    "no_ingredients_list": {
+        "pillar": "content",
+        "priority": "medium",
+        "title": "Add Full Ingredients / Materials List",
+        "description": "No ingredients or materials list found. For beauty, food, supplements, and fashion D2C brands, AI assistants frequently cite ingredient lists when users ask 'Is X safe?' or 'What's in X?'",
+        "action": "Add a complete ingredients/materials section on each product page. For food/beauty: list every ingredient. For fashion: list materials and sourcing. For tech: list specifications.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "content",
+    },
+    "no_use_cases": {
+        "pillar": "content",
+        "priority": "high",
+        "title": "Add Use Cases / 'Who Is This For?' Section",
+        "description": "No use case content detected. AI assistants match products to users based on use cases. 'Best for sensitive skin' or 'Ideal for remote teams' helps AI recommend your product for the right queries.",
+        "action": "Add a 'Who Is This For?' section listing 3-5 ideal customer profiles with specific scenarios. Use headings like 'Best for [use case]' — these map directly to AI search queries.",
+        "impact_estimate": "Could improve your score by ~8 points",
+        "category": "content",
+    },
+    "no_how_to_use": {
+        "pillar": "content",
+        "priority": "medium",
+        "title": "Add 'How to Use' Guide",
+        "description": "No usage instructions found. AI models cite 'how to use' content when users ask about product application. This is especially important for beauty, supplements, and tech products.",
+        "action": "Add a step-by-step 'How to Use' section with clear instructions, dosage (if applicable), and tips. Add HowTo schema markup for extra AI visibility.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "content",
+    },
+    "no_pricing_transparency": {
+        "pillar": "content",
+        "priority": "high",
+        "title": "Make Pricing Visible and Transparent",
+        "description": "Product pricing not clearly visible. AI shopping assistants need clear pricing to recommend products. Pages where price is hidden behind logins or 'contact us' get deprioritized.",
+        "action": "Display prices clearly on all product pages. Include: base price, any subscription discounts, bundle pricing, and currency. Add price to your Product schema's offers.price field.",
+        "impact_estimate": "Could improve your score by ~8 points — AI assistants always cite price",
+        "category": "content",
+    },
+    "no_trust_badges": {
+        "pillar": "eeat",
+        "priority": "medium",
+        "title": "Add Trust Badges & Certifications",
+        "description": "No trust badges, certifications, or security indicators found. AI engines look for trust signals: 'FDA approved', 'Certified B Corp', 'SSL secured', 'Money-back guarantee'. These boost AI confidence.",
+        "action": "Add visible trust badges: payment security (Visa/Mastercard/PayPal), certifications (organic, cruelty-free, FDA), guarantees (30-day money-back), and awards. Place them near the buy button and in the footer.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "eeat",
+    },
+    "no_social_proof_numbers": {
+        "pillar": "content",
+        "priority": "high",
+        "title": "Add Social Proof Numbers",
+        "description": "No social proof metrics found. AI assistants love specific numbers: '50,000+ happy customers', 'Rated 4.9/5 on Trustpilot', 'Featured in Vogue and GQ'. These are exactly what AI cites.",
+        "action": "Add prominently: customer count, review score, press mentions, social followers, and units sold. Use specific numbers, not vague claims. Place them above the fold.",
+        "impact_estimate": "Could improve your score by ~10 points",
+        "category": "content",
+    },
+    "no_video_content": {
+        "pillar": "content",
+        "priority": "medium",
+        "title": "Add Video Content or Demo",
+        "description": "No video content detected. Product demos and explainer videos increase time on page and provide rich content that AI can reference. Google's AI Overview frequently surfaces pages with video.",
+        "action": "Add a product demo video, unboxing, or tutorial. Embed from YouTube (AI indexes YouTube content). Add VideoObject schema markup with name, description, and thumbnailUrl.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "content",
+    },
+    "no_sustainability_info": {
+        "pillar": "eeat",
+        "priority": "medium",
+        "title": "Add Sustainability / Ethical Sourcing Info",
+        "description": "No sustainability or ethical sourcing content found. AI assistants increasingly answer queries like 'Is X brand sustainable?' or 'eco-friendly alternatives to...'. D2C brands with sustainability content get cited in these responses.",
+        "action": "Add a sustainability section or page covering: materials sourcing, manufacturing practices, packaging, carbon footprint initiatives, and certifications. Be specific with data.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "eeat",
+    },
+    "no_bundle_offers": {
+        "pillar": "content",
+        "priority": "medium",
+        "title": "Add Bundle / Subscription Options",
+        "description": "No bundle deals or subscription options visible. AI shopping assistants often recommend bundles and subscriptions when users ask for 'best value' or 'cheapest way to buy X'.",
+        "action": "Create bundle pages showing savings: 'Buy 3, Save 20%'. If applicable, offer subscriptions: 'Subscribe & Save 15% — cancel anytime'. Make savings percentages prominent.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "content",
+    },
+    "thin_product_description": {
+        "pillar": "content",
+        "priority": "critical",
+        "title": "Expand Product Description (Min 300 Words)",
+        "description": "Product description is too thin (<150 words). AI models cannot recommend products they don't understand. Short descriptions get skipped. Aim for 300-500 words covering benefits, features, use cases, and differentiators.",
+        "action": "STEP 1 — Write a compelling opening that answers 'What is this and who is it for?'\nSTEP 2 — List 5+ benefits (not just features).\nSTEP 3 — Add a 'What makes this different?' section.\nSTEP 4 — Include specific data: dimensions, weight, ingredients, materials.\nSTEP 5 — End with a use case: 'Perfect for [scenario].'",
+        "impact_estimate": "Could improve your score by ~15 points — thin descriptions = invisible to AI",
+        "category": "content",
+    },
+    "no_structured_specs": {
+        "pillar": "content",
+        "priority": "medium",
+        "title": "Add Structured Product Specifications",
+        "description": "No structured specs table found. AI assistants pull specifications when answering 'What are the specs of X?' or comparison queries. A clean specs table is highly citable.",
+        "action": "Add a specifications table with: dimensions, weight, materials, color options, warranty, compatibility. Use an HTML <table> or definition list (<dl>) for structured data.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "content",
+    },
+    "no_local_business_schema": {
+        "pillar": "schema",
+        "priority": "medium",
+        "title": "Add LocalBusiness Schema (If Applicable)",
+        "description": "No LocalBusiness schema found. If you have a physical location, showroom, or warehouse, adding LocalBusiness schema helps AI map your brand to location-based queries.",
+        "action": 'Add LocalBusiness schema:\n{"@type":"LocalBusiness","name":"Your Brand","address":{"@type":"PostalAddress","streetAddress":"...","addressLocality":"London","postalCode":"...","addressCountry":"GB"},"telephone":"+44...","openingHours":"Mo-Fr 09:00-17:00"}',
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "schema",
+    },
+    "no_meta_description": {
+        "pillar": "technical",
+        "priority": "high",
+        "title": "Add a Compelling Meta Description",
+        "description": "No meta description found. AI engines use meta descriptions as a summary when deciding whether to cite your page. A missing meta description means AI generates its own (often poorly).",
+        "action": 'Add a unique meta description (150-160 chars) that summarizes the page value:\n<meta name="description" content="Award-winning organic skincare loved by 50,000+ customers. Free shipping over £30. Shop our dermatologist-approved range.">\nInclude: key benefit, social proof number, and call to action.',
+        "impact_estimate": "Could improve your score by ~8 points",
+        "category": "technical",
+    },
+    "no_og_tags": {
+        "pillar": "technical",
+        "priority": "medium",
+        "title": "Add Open Graph Tags for Social Sharing",
+        "description": "No Open Graph (og:) tags found. When your pages are shared on social media or referenced by AI, og:title, og:description, and og:image provide the preview. Missing OG tags = ugly previews = fewer clicks.",
+        "action": 'Add to your <head>:\n<meta property="og:title" content="Your Page Title">\n<meta property="og:description" content="Your page summary">\n<meta property="og:image" content="https://yoursite.com/image.jpg">\n<meta property="og:type" content="product">',
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "technical",
+    },
+    "no_contact_page": {
+        "pillar": "eeat",
+        "priority": "high",
+        "title": "Add Contact Information",
+        "description": "No contact page or contact information detected. AI engines verify brand legitimacy by checking for contact info. A brand without visible contact details appears less trustworthy.",
+        "action": "Add a /contact page with: email address, phone number (if applicable), physical address, contact form, and response time expectation. Link from the footer on every page.",
+        "impact_estimate": "Could improve your score by ~5 points",
+        "category": "eeat",
+    },
+    "no_privacy_policy": {
+        "pillar": "eeat",
+        "priority": "medium",
+        "title": "Add Privacy Policy Page",
+        "description": "No privacy policy found. AI trust signals include legal compliance pages. A missing privacy policy is a red flag for AI systems evaluating brand trustworthiness.",
+        "action": "Create a /privacy-policy page covering: data collection, usage, cookies, third parties, and user rights. Link from footer. Use a privacy policy generator if needed.",
+        "impact_estimate": "Could improve your score by ~3 points",
+        "category": "eeat",
+    },
 }
 
 PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -854,6 +1073,31 @@ IMPACT_SCORES = {
     # Crawl failures
     "crawl_blocked_403": 98,    # Can't be indexed at all
     "crawl_timeout": 96,        # Too slow for any crawler
+    # D2C / E-Commerce specific
+    "no_product_schema": 88,    # Critical for shopping AI
+    "no_review_schema": 72,     # Reviews = trust signal
+    "no_breadcrumb_schema": 30, # Site hierarchy
+    "no_shipping_info": 68,     # AI cites shipping details
+    "no_returns_policy": 55,    # Trust signal
+    "no_customer_reviews": 85,  # Strongest D2C trust signal
+    "no_brand_story": 60,       # Brand identity
+    "no_comparison_content": 78, # AI loves comparisons
+    "no_ingredients_list": 35,  # Niche but important
+    "no_use_cases": 65,         # Maps to AI queries
+    "no_how_to_use": 40,        # Usage content
+    "no_pricing_transparency": 70, # AI needs prices
+    "no_trust_badges": 42,      # Certifications
+    "no_social_proof_numbers": 75, # AI cites numbers
+    "no_video_content": 35,     # Rich content
+    "no_sustainability_info": 30, # Growing trend
+    "no_bundle_offers": 32,     # Value queries
+    "thin_product_description": 82, # Thin = invisible
+    "no_structured_specs": 38,  # Specification queries
+    "no_local_business_schema": 25, # Local queries
+    "no_meta_description": 65,  # AI summary source
+    "no_og_tags": 28,           # Social sharing
+    "no_contact_page": 55,      # Trust signal
+    "no_privacy_policy": 20,    # Legal compliance
 }
 
 MAX_RECOMMENDATIONS = 12
@@ -899,8 +1143,10 @@ STEP_META = {
         "xp_reward": 30, "difficulty": "easy", "estimated_minutes": 2,
         "steps": [
             {"n": 1, "title": "Find your page title", "detail": "Identify the main topic of the page — this becomes your H1.", "xp": 5},
-            {"n": 2, "title": "Add the H1 tag", "detail": "Wrap your title in <h1>Your Page Title</h1>. Place it as the first heading on the page.", "code": "<h1>Your Page Title Here</h1>", "xp": 15},
-            {"n": 3, "title": "Verify only one H1 exists", "detail": "Search your page source for '<h1' — there should be exactly one.", "xp": 10},
+            {"n": 2, "title": "Add the H1 tag", "detail": "Wrap your title in <h1>Your Page Title</h1>. Place it as the first heading.", "code": "<h1>Your Page Title Here</h1>", "xp": 15,
+             "shopify": {"detail": "Go to Online Store → Themes → Customize → select the page. Click the title section — ensure it uses H1.\n\nIf editing code: Online Store → Themes → Edit code → Sections → main-product.liquid or page.liquid → add:", "code": "<h1>{{ page.title }}</h1>"},
+             "wordpress": {"detail": "Open the page in Block Editor (Gutenberg). Click the title at the top — WordPress auto-renders it as H1. If using Classic Editor, the title field maps to H1 in most themes."}},
+            {"n": 3, "title": "Verify only one H1 exists", "detail": "Visit your page → right-click → View Page Source → Ctrl+F search '<h1' → should be exactly one match.", "xp": 10},
         ],
     },
     "multiple_h1": {
@@ -924,8 +1170,12 @@ STEP_META = {
         "steps": [
             {"n": 1, "title": "Brainstorm 5-8 questions", "detail": "Think about what your customers ask most. Check Google's 'People Also Ask' for your topic.", "xp": 10},
             {"n": 2, "title": "Write concise answers", "detail": "Each answer should be 2-4 sentences. Start with a direct answer, then elaborate.", "xp": 15},
-            {"n": 3, "title": "Add the FAQ HTML", "detail": "Add an FAQ section with <h2>Frequently Asked Questions</h2> followed by Q&A pairs.", "code": "<h2>Frequently Asked Questions</h2>\n<h3>What is [your topic]?</h3>\n<p>[Direct answer in 2-3 sentences]</p>", "xp": 15},
-            {"n": 4, "title": "Add FAQPage schema", "detail": "Add JSON-LD FAQPage markup so AI engines can parse your Q&As directly.", "code": '<script type="application/ld+json">\n{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Your question?","acceptedAnswer":{"@type":"Answer","text":"Your answer."}}]}\n</script>', "xp": 20},
+            {"n": 3, "title": "Add the FAQ section to your page", "detail": "Add FAQ content with question/answer pairs.", "code": "<h2>Frequently Asked Questions</h2>\n<h3>What is [your topic]?</h3>\n<p>[Direct answer in 2-3 sentences]</p>", "xp": 15,
+             "shopify": {"detail": "Go to Online Store → Pages → select your page → in the rich text editor, scroll to the bottom → add an H2 heading 'Frequently Asked Questions' → add H3 headings for each question → add paragraph answers below each.\n\nFor product pages: Online Store → Themes → Customize → Product page → Add block → 'Collapsible tab' → add Q&A content."},
+             "wordpress": {"detail": "Open the page in Block Editor → click '+' to add blocks at the bottom → add Heading (H2) 'Frequently Asked Questions' → add H3 headings for questions → add Paragraph blocks for answers.\n\nOr install 'Yoast SEO' plugin — it has a dedicated FAQ block that auto-generates schema markup."}},
+            {"n": 4, "title": "Add FAQPage schema", "detail": "Add JSON-LD FAQPage markup so AI can parse your Q&As.", "code": '<script type="application/ld+json">\n{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Your question?","acceptedAnswer":{"@type":"Answer","text":"Your answer."}}]}\n</script>', "xp": 20,
+             "shopify": {"detail": "Go to Online Store → Themes → Edit code → Snippets → New snippet → name it 'faq-schema' → paste the JSON-LD → Save.\nThen in your page template add: {% render 'faq-schema' %}\n\nOr if Signalor app is installed, it can inject FAQ schema via Theme Extension."},
+             "wordpress": {"detail": "If using Yoast FAQ block, schema is auto-generated — no extra step needed.\n\nOtherwise: install WPCode plugin → Snippets → Add New → paste the JSON-LD → set Location: 'Page Specific' → select your FAQ page → Activate."}},
         ],
     },
     "no_lists": {
@@ -974,7 +1224,9 @@ STEP_META = {
         "steps": [
             {"n": 1, "title": "Identify quotable experts", "detail": "Find 2-3 recognized experts in your field (CEOs, researchers, authors).", "xp": 10},
             {"n": 2, "title": "Find or create quotes", "detail": "Pull quotes from interviews, books, or conference talks. Or quote your own team's experts.", "xp": 15},
-            {"n": 3, "title": "Add with proper attribution", "detail": "Use blockquote tags with the expert's name, title, and organization.", "code": '<blockquote>\n  <p>"AI will transform how small businesses compete globally."</p>\n  <cite>— Dr. Jane Smith, Head of AI Research at Stanford</cite>\n</blockquote>', "xp": 25},
+            {"n": 3, "title": "Add with proper attribution", "detail": "Paste the blockquote HTML into your page content.", "code": '<blockquote>\n  <p>"AI will transform how small businesses compete globally."</p>\n  <cite>— Dr. Jane Smith, Head of AI Research at Stanford</cite>\n</blockquote>', "xp": 25,
+             "shopify": {"detail": "Go to Online Store → Pages (or Products) → select the page → click the HTML view (<>) in the editor → paste the blockquote code where you want the quote to appear → Save."},
+             "wordpress": {"detail": "Edit the page in Block Editor → add a 'Quote' block (click '+' → search 'Quote') → paste the quote text and attribution → Update the page."}},
         ],
     },
     "weak_authoritative_tone": {
@@ -1030,8 +1282,12 @@ STEP_META = {
     "keyword_stuffing": {
         "xp_reward": 50, "difficulty": "medium", "estimated_minutes": 15,
         "steps": [
-            {"n": 1, "title": "Find the repeated keyword", "detail": "Use Ctrl+F to find the most repeated keyword. Count occurrences.", "xp": 5},
-            {"n": 2, "title": "Remove unnatural repetitions", "detail": "Keep the keyword in title, first paragraph, and 2-3 natural mentions. Remove the rest.", "xp": 20},
+            {"n": 1, "title": "Find the repeated keyword", "detail": "Use Ctrl+F to find the most repeated keyword. Count occurrences.", "xp": 5,
+             "shopify": {"detail": "Go to Online Store → Pages (or Products) → select the page → click the HTML view (<>) in the editor → Ctrl+F to search for the repeated keyword. Count how many times it appears."},
+             "wordpress": {"detail": "Edit the page in Block Editor → click the '⋮' menu (top right) → Code editor → Ctrl+F to search for the repeated keyword. Or install Yoast SEO — it flags keyword stuffing in the readability analysis."}},
+            {"n": 2, "title": "Remove unnatural repetitions", "detail": "Keep the keyword in: title, first paragraph, one heading, and 2-3 natural mentions. Remove all other forced repetitions.", "xp": 20,
+             "shopify": {"detail": "In the page/product editor, rewrite sentences that repeat the keyword unnaturally. For product descriptions: focus on benefits, not keyword repetition. Save after editing."},
+             "wordpress": {"detail": "In the Block Editor, click on each paragraph with excessive keywords → rewrite naturally. If using Yoast, the 'Keyphrase density' indicator will turn green when fixed."}},
             {"n": 3, "title": "Replace with synonyms", "detail": "Use variations and related terms instead of repeating the exact same phrase.", "xp": 15},
             {"n": 4, "title": "Read aloud test", "detail": "Read your content aloud. If any phrase sounds forced or repetitive, rewrite it.", "xp": 10},
         ],
@@ -1043,8 +1299,10 @@ STEP_META = {
         "steps": [
             {"n": 1, "title": "Choose your schema type", "detail": "Organization for homepage, Article for blog posts, Product for product pages.", "xp": 10},
             {"n": 2, "title": "Generate the JSON-LD", "detail": "Use the template below and fill in your details.", "code": '<script type="application/ld+json">\n{\n  "@context": "https://schema.org",\n  "@type": "Organization",\n  "name": "Your Company",\n  "url": "https://yoursite.com",\n  "logo": "https://yoursite.com/logo.png",\n  "description": "What your company does",\n  "sameAs": ["https://linkedin.com/company/you", "https://twitter.com/you"]\n}\n</script>', "xp": 30},
-            {"n": 3, "title": "Add to your page <head>", "detail": "Paste the script tag inside your <head> section, before </head>.", "xp": 20},
-            {"n": 4, "title": "Validate with Google", "detail": "Test at search.google.com/test/rich-results — fix any errors shown.", "xp": 15},
+            {"n": 3, "title": "Add the schema to your site", "detail": "Paste the script tag inside your <head> section.", "xp": 20,
+             "shopify": {"detail": "Go to Online Store → Themes → Edit code → Layout → theme.liquid → find </head> → paste the JSON-LD script just before it → Save.\n\nIf using Signalor app with Theme Extension, schema is auto-injected from metafields."},
+             "wordpress": {"detail": "Install WPCode plugin (free) → Code Snippets → Add New → paste the JSON-LD → set Location to 'Site Wide Header' → Activate.\n\nOr if using Yoast/Rank Math, both add Organization schema automatically. Check SEO → Search Appearance → Organization."}},
+            {"n": 4, "title": "Validate with Google", "detail": "Go to search.google.com/test/rich-results → paste your page URL → Run Test. Fix any errors.", "xp": 15},
         ],
     },
     "no_faqpage_schema": {
@@ -1140,10 +1398,14 @@ STEP_META = {
     "no_author": {
         "xp_reward": 60, "difficulty": "easy", "estimated_minutes": 5,
         "steps": [
-            {"n": 1, "title": "Add visible author byline", "detail": "Add your name and title below the page title.", "code": '<p class="author">By <strong>Your Name</strong>, Your Title at Your Brand</p>', "xp": 15},
-            {"n": 2, "title": "Add author meta tag", "detail": "Add to your page <head> section.", "code": '<meta name="author" content="Your Name">', "xp": 15},
-            {"n": 3, "title": "Add to Article schema", "detail": "If you have Article/BlogPosting schema, add the author property.", "code": '"author": {"@type": "Person", "name": "Your Name", "jobTitle": "Your Title", "url": "https://yoursite.com/about"}', "xp": 20},
-            {"n": 4, "title": "Use your real identity", "detail": "AI cross-references author names across the web. Use your real name for maximum E-E-A-T.", "xp": 10},
+            {"n": 1, "title": "Add visible author byline", "detail": "Show the author's name and title on the page.", "code": '<p class="author">By <strong>Your Name</strong>, Your Title at Your Brand</p>', "xp": 15,
+             "shopify": {"detail": "Go to Online Store → Themes → Customize → select the page/blog post. If theme supports author: enable in theme settings.\n\nOtherwise: Edit code → Sections → main-article.liquid → add after the title:", "code": '<p class="author">By <strong>{{ article.author }}</strong></p>'},
+             "wordpress": {"detail": "Most themes show authors on posts automatically. To enable: Appearance → Customize → Blog settings → 'Show author'.\n\nFor pages: edit in Block Editor → add a Paragraph block below title with byline. Or install 'Simple Author Box' plugin for a professional author card."}},
+            {"n": 2, "title": "Add author meta tag", "detail": "Add to your page <head> for crawler discovery.", "code": '<meta name="author" content="Your Name">', "xp": 15,
+             "shopify": {"detail": "Go to Online Store → Themes → Edit code → Layout → theme.liquid → find </head> → paste the meta tag just before it."},
+             "wordpress": {"detail": "Install WPCode → Add Snippet → paste the meta tag → Location: 'Site Wide Header'.\n\nOr if using Yoast: it adds author meta automatically when posts have assigned authors."}},
+            {"n": 3, "title": "Add to Article schema", "detail": "Add author property to your Article/BlogPosting schema.", "code": '"author": {"@type": "Person", "name": "Your Name", "jobTitle": "Your Title", "url": "https://yoursite.com/about"}', "xp": 20},
+            {"n": 4, "title": "Use your real identity", "detail": "AI cross-references names across the web. Use your real name + link your LinkedIn for maximum E-E-A-T.", "xp": 10},
         ],
     },
     "no_author_bio": {
@@ -1239,19 +1501,24 @@ STEP_META = {
     "no_llms_txt": {
         "xp_reward": 75, "difficulty": "easy", "estimated_minutes": 5,
         "steps": [
-            {"n": 1, "title": "Create the file", "detail": "Create a file called llms.txt at your website root.", "xp": 10},
-            {"n": 2, "title": "Add your content", "detail": "Use this template — customize with your brand info.", "code": "# Your Brand Name\n\n## About\nOne paragraph about what your company does.\n\n## Key Pages\n- Homepage: https://yoursite.com/\n- About: https://yoursite.com/about\n- Products: https://yoursite.com/products\n- Blog: https://yoursite.com/blog\n\n## Contact\n- Email: hello@yoursite.com\n- Twitter: @yourbrand", "xp": 30},
-            {"n": 3, "title": "Upload to your server", "detail": "Upload so it's accessible at https://yoursite.com/llms.txt", "xp": 20},
-            {"n": 4, "title": "Verify it's live", "detail": "Open https://yoursite.com/llms.txt in your browser — it should show as plain text.", "xp": 15},
+            {"n": 1, "title": "Prepare your llms.txt content", "detail": "Copy this template and customize with your brand.", "code": "# Your Brand Name\n\n## About\nOne paragraph about what your company does.\n\n## Key Pages\n- Homepage: https://yoursite.com/\n- About: https://yoursite.com/about\n- Products: https://yoursite.com/products\n- Blog: https://yoursite.com/blog\n\n## Contact\n- Email: hello@yoursite.com\n- Twitter: @yourbrand", "xp": 15},
+            {"n": 2, "title": "Upload llms.txt to your site", "detail": "Make it accessible at https://yoursite.com/llms.txt", "xp": 35,
+             "shopify": {"detail": "Shopify doesn't serve files at the root. Use our Signalor app: Apps → Signalor → it serves llms.txt at /apps/signalor/llms.txt automatically.\n\nAlternative: Go to Online Store → Pages → Add page → title: 'llms.txt' → URL handle: 'llms-txt' → paste content. Creates /pages/llms-txt (crawlable by AI).\n\nBest: use a Cloudflare Worker to serve at /llms.txt."},
+             "wordpress": {"detail": "If Signalor GEO plugin is installed: go to Settings → Signalor GEO → paste content in 'llms.txt Content' field → Save. Plugin serves it at /llms.txt.\n\nWithout plugin: connect via FTP/SFTP → upload llms.txt to your WordPress root (same folder as wp-config.php)."}},
+            {"n": 3, "title": "Verify it's live", "detail": "Open your llms.txt URL in a browser — should show as plain text.", "xp": 25,
+             "shopify": {"detail": "Visit https://your-store.myshopify.com/apps/signalor/llms.txt (Signalor app) or https://your-store.myshopify.com/pages/llms-txt (page method)."},
+             "wordpress": {"detail": "Visit https://yoursite.com/llms.txt — should display plain text. If 404, check plugin is active or file is in the correct directory."}},
         ],
     },
     "ai_bots_blocked": {
         "xp_reward": 80, "difficulty": "easy", "estimated_minutes": 5,
         "steps": [
-            {"n": 1, "title": "Open robots.txt", "detail": "Go to https://yoursite.com/robots.txt and review the contents.", "xp": 5},
-            {"n": 2, "title": "Add AI crawler rules", "detail": "Add allow rules for all major AI crawlers.", "code": "User-agent: GPTBot\nAllow: /\n\nUser-agent: Google-Extended\nAllow: /\n\nUser-agent: anthropic-ai\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n\nUser-agent: PerplexityBot\nAllow: /", "xp": 35},
-            {"n": 3, "title": "Remove blocking rules", "detail": "Find and remove any Disallow rules targeting these bot names.", "xp": 20},
-            {"n": 4, "title": "Check your CDN/WAF", "detail": "If using Cloudflare, check Security > Bots to ensure AI bots aren't blocked at the WAF level.", "xp": 20},
+            {"n": 1, "title": "Check your current robots.txt", "detail": "Visit https://yoursite.com/robots.txt — look for lines blocking GPTBot, ClaudeBot, PerplexityBot.", "xp": 5},
+            {"n": 2, "title": "Add AI crawler allow rules", "detail": "Add these lines to allow all major AI crawlers.", "code": "User-agent: GPTBot\nAllow: /\n\nUser-agent: Google-Extended\nAllow: /\n\nUser-agent: anthropic-ai\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n\nUser-agent: PerplexityBot\nAllow: /", "xp": 35,
+             "shopify": {"detail": "Go to Online Store → Themes → Edit code → Templates → find 'robots.txt.liquid'. Add the allow rules. If file doesn't exist, create it to override Shopify's default.\n\nIf using Signalor app, it can serve a custom robots.txt via App Proxy.", "code": "{% comment %} Allow AI crawlers {% endcomment %}\nUser-agent: GPTBot\nAllow: /\n\nUser-agent: Google-Extended\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n\nUser-agent: PerplexityBot\nAllow: /"},
+             "wordpress": {"detail": "Using Yoast SEO: go to Yoast → Tools → File editor → robots.txt → add the allow rules → Save.\n\nUsing Rank Math: go to Rank Math → General Settings → Edit robots.txt.\n\nUsing Signalor GEO plugin: Settings → Signalor GEO → paste robots.txt content → Save.\n\nManually: edit robots.txt in your WordPress root via FTP."}},
+            {"n": 3, "title": "Remove any Disallow rules for AI bots", "detail": "Search robots.txt for 'Disallow' lines targeting GPTBot, ClaudeBot, etc. Delete them.", "xp": 20},
+            {"n": 4, "title": "Check your CDN/WAF", "detail": "If using Cloudflare: Security → Bots → ensure AI bots aren't blocked. Add firewall rules to allow GPTBot, ClaudeBot user agents.", "xp": 20},
         ],
     },
     "no_sitemap": {
@@ -1412,6 +1679,151 @@ STEP_META = {
             {"n": 2, "title": "Upgrade hosting if needed", "detail": "Shared hosting often can't handle crawler traffic. Consider VPS or CDN.", "xp": 25},
             {"n": 3, "title": "Enable caching", "detail": "Server-side caching (Redis, Varnish) and CDN caching dramatically reduce response time.", "xp": 25},
             {"n": 4, "title": "Optimize database queries", "detail": "Slow DB queries are the #1 cause of timeout. Check your CMS for slow queries.", "xp": 15},
+        ],
+    },
+
+    # ── D2C Specific Steps ──
+
+    "no_product_schema": {
+        "xp_reward": 80, "difficulty": "medium", "estimated_minutes": 15,
+        "steps": [
+            {
+                "n": 1, "title": "Gather your product data", "xp": 10,
+                "detail": "Collect: product name, description, image URL, price, currency, availability, brand name, and average rating.",
+            },
+            {
+                "n": 2, "title": "Add Product schema to your page", "xp": 40,
+                "detail": "Add JSON-LD Product markup with all required fields.",
+                "code": '<script type="application/ld+json">\n{\n  "@context": "https://schema.org",\n  "@type": "Product",\n  "name": "Your Product Name",\n  "description": "Product description here",\n  "image": "https://yoursite.com/product.jpg",\n  "brand": {"@type": "Brand", "name": "Your Brand"},\n  "offers": {\n    "@type": "Offer",\n    "price": "29.99",\n    "priceCurrency": "GBP",\n    "availability": "https://schema.org/InStock",\n    "url": "https://yoursite.com/product"\n  },\n  "aggregateRating": {\n    "@type": "AggregateRating",\n    "ratingValue": "4.8",\n    "reviewCount": "124"\n  }\n}\n</script>',
+                "shopify": {
+                    "detail": "Shopify auto-generates basic Product schema, but it's often incomplete. To add full schema:\n\n1. Go to Online Store → Themes → Edit code\n2. Open Sections → main-product.liquid (or product-template.liquid)\n3. Paste the JSON-LD at the bottom of the file, before the closing tag\n4. Replace hardcoded values with Liquid variables:",
+                    "code": '<script type="application/ld+json">\n{\n  "@context": "https://schema.org",\n  "@type": "Product",\n  "name": {{ product.title | json }},\n  "description": {{ product.description | strip_html | json }},\n  "image": {{ product.featured_image | image_url: width: 1024 | json }},\n  "brand": {"@type": "Brand", "name": {{ shop.name | json }}},\n  "offers": {\n    "@type": "Offer",\n    "price": {{ product.price | money_without_currency | json }},\n    "priceCurrency": {{ cart.currency.iso_code | json }},\n    "availability": {% if product.available %}"https://schema.org/InStock"{% else %}"https://schema.org/OutOfStock"{% endif %},\n    "url": "{{ shop.url }}{{ product.url }}"\n  }\n}\n</script>',
+                },
+                "wordpress": {
+                    "detail": "If using WooCommerce:\n\n1. Install 'Yoast WooCommerce SEO' plugin — it auto-generates Product schema\n2. Or install 'WPCode' plugin → Code Snippets → Add New\n3. Paste the JSON-LD below → set Location to 'WooCommerce Product Pages Only'\n4. Replace placeholder values with your product data\n\nIf not using WooCommerce: add the JSON-LD manually to your product page template via Appearance → Theme Editor → single-product.php",
+                },
+            },
+            {"n": 3, "title": "Validate with Google Rich Results Test", "detail": "Go to search.google.com/test/rich-results → paste your product URL → check for Product schema with no errors.", "xp": 15},
+            {"n": 4, "title": "Add rating data if available", "detail": "If you use a reviews app (Judge.me, Yotpo, Trustpilot), ensure the aggregateRating is populated with real data.", "xp": 15},
+        ],
+    },
+    "no_customer_reviews": {
+        "xp_reward": 70, "difficulty": "medium", "estimated_minutes": 20,
+        "steps": [
+            {
+                "n": 1, "title": "Install a reviews solution", "xp": 20,
+                "detail": "Choose a reviews platform to collect and display customer reviews.",
+                "shopify": {
+                    "detail": "Go to Shopify App Store and install one of:\n\n• Judge.me (free tier available) — Apps → Search 'Judge.me' → Install\n• Loox (photo reviews) — Apps → Search 'Loox' → Install\n• Yotpo — Apps → Search 'Yotpo' → Install\n\nAfter installing, enable the review widget on your product pages via the app settings.",
+                },
+                "wordpress": {
+                    "detail": "If using WooCommerce, reviews are built-in:\n\n1. Go to WooCommerce → Settings → Products tab\n2. Check 'Enable product reviews'\n3. Check 'Show verified owner label'\n\nFor non-WooCommerce sites, install a reviews plugin:\n• Go to Plugins → Add New → search 'Site Reviews' or 'WP Customer Reviews' → Install & Activate",
+                },
+            },
+            {"n": 2, "title": "Collect 5-10 initial reviews", "detail": "Email your best customers asking for reviews. Offer a small incentive (10% off next order). Focus on getting detailed reviews with specific results.", "xp": 15},
+            {
+                "n": 3, "title": "Add Review schema markup", "xp": 20,
+                "detail": "Ensure reviews generate schema markup so AI can read them.",
+                "shopify": {
+                    "detail": "Most Shopify review apps (Judge.me, Loox) automatically add Review schema. Verify by:\n1. Visit your product page\n2. Right-click → View Page Source\n3. Search for 'AggregateRating' — it should be present\n\nIf not, check the app settings for 'SEO' or 'Schema' options and enable them.",
+                },
+                "wordpress": {
+                    "detail": "WooCommerce + Yoast SEO auto-generates Review schema. Verify by:\n1. Visit your product page\n2. Right-click → View Page Source\n3. Search for 'AggregateRating'\n\nIf missing, install 'Schema & Structured Data for WP' plugin and enable Review schema.",
+                },
+            },
+            {"n": 4, "title": "Display reviews prominently", "detail": "Show reviews above the fold or right below the product description. Include star ratings, reviewer names, and dates. AI specifically looks for visible review content.", "xp": 15},
+        ],
+    },
+    "no_meta_description": {
+        "xp_reward": 40, "difficulty": "easy", "estimated_minutes": 5,
+        "steps": [
+            {
+                "n": 1, "title": "Write a compelling meta description (150-160 chars)", "xp": 15,
+                "detail": "Include: key benefit, a number (social proof), and what makes you different.",
+                "code": '<meta name="description" content="Award-winning organic skincare loved by 50,000+ customers. Free shipping over £30. Dermatologist-approved, cruelty-free formulas.">',
+            },
+            {
+                "n": 2, "title": "Add the meta description to your page", "xp": 25,
+                "detail": "Add it to your page's <head> section.",
+                "shopify": {
+                    "detail": "For product pages:\n1. Go to Products → select the product\n2. Scroll down to 'Search engine listing' → click 'Edit'\n3. Enter your meta description in the 'Description' field\n4. Save\n\nFor other pages:\n1. Go to Online Store → Pages → select the page\n2. Scroll to 'Search engine listing' → click 'Edit'\n3. Enter meta description → Save",
+                },
+                "wordpress": {
+                    "detail": "If using Yoast SEO:\n1. Edit the page/post\n2. Scroll to the Yoast SEO box below the editor\n3. Click 'Edit snippet'\n4. Enter your meta description\n5. Update the page\n\nIf using Rank Math:\n1. Edit the page → scroll to Rank Math box\n2. Click 'Edit Snippet'\n3. Enter description → Update",
+                },
+            },
+        ],
+    },
+    "thin_product_description": {
+        "xp_reward": 65, "difficulty": "medium", "estimated_minutes": 25,
+        "steps": [
+            {"n": 1, "title": "Write a benefit-led opening (50 words)", "detail": "Answer: What is this product and why should I care? Lead with the main benefit, not features.", "xp": 10},
+            {"n": 2, "title": "List 5+ benefits with details", "detail": "Not just 'Long-lasting'. Write: 'Lasts 12+ hours without reapplication — tested in humid conditions.' Each benefit = one bullet.", "xp": 15},
+            {"n": 3, "title": "Add a 'What makes this different' section", "detail": "Compare to alternatives: 'Unlike traditional formulas, ours uses X technology that...'", "xp": 10},
+            {"n": 4, "title": "Include specifications", "detail": "Add: dimensions, weight, ingredients/materials, color options, warranty. Use a table or list.", "xp": 10},
+            {
+                "n": 5, "title": "Add a use case paragraph", "xp": 10,
+                "detail": "End with: 'Perfect for [scenario].' This maps directly to AI search queries.",
+                "shopify": {
+                    "detail": "Go to Products → select the product → edit the Description field in the rich text editor. Aim for 300-500 words total. Use headings (H2, H3) to structure sections.",
+                },
+                "wordpress": {
+                    "detail": "Edit the product/page in the Block Editor. Use Heading blocks (H2) for sections and Paragraph blocks for content. For WooCommerce: edit the 'Product description' tab. Aim for 300-500 words.",
+                },
+            },
+            {"n": 6, "title": "Verify word count", "detail": "Select all text on the page → paste into wordcounter.net → aim for 300-500 words minimum.", "xp": 10},
+        ],
+    },
+    "no_shipping_info": {
+        "xp_reward": 45, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {
+                "n": 1, "title": "Create a shipping information section", "xp": 20,
+                "detail": "Include: delivery timeframes, costs, free shipping threshold, international availability.",
+                "shopify": {
+                    "detail": "1. Go to Settings → Shipping and delivery — configure your shipping zones\n2. Go to Online Store → Pages → Add page → title: 'Shipping & Delivery'\n3. Add your shipping details: timeframes per zone, costs, free shipping threshold\n4. Link from footer: Online Store → Navigation → Footer → Add 'Shipping' link\n\nFor product pages: add shipping info in the product description or use a collapsible tab (most themes support this in Customize → Product page → add 'Collapsible tab' block).",
+                },
+                "wordpress": {
+                    "detail": "1. Go to Pages → Add New → title: 'Shipping & Delivery'\n2. Add your shipping details with headings for each section\n3. Publish the page\n4. Add to footer: Appearance → Menus → select Footer menu → add the Shipping page → Save\n\nFor WooCommerce: go to WooCommerce → Settings → Shipping to configure zones, then add a 'Shipping' tab to product pages via a plugin like 'WooCommerce Tab Manager'.",
+                },
+            },
+            {"n": 2, "title": "Add shipping details to product pages", "detail": "Show estimated delivery time and cost directly on each product page, near the Add to Cart button.", "xp": 15},
+            {"n": 3, "title": "Highlight free shipping threshold", "detail": "If you offer free shipping over a threshold, make it prominent: 'Free shipping on orders over £50'. Place it in the announcement bar.", "xp": 10},
+        ],
+    },
+    "no_comparison_content": {
+        "xp_reward": 65, "difficulty": "hard", "estimated_minutes": 45,
+        "steps": [
+            {"n": 1, "title": "Identify your top 3 competitors", "detail": "Search your main keywords on Google/ChatGPT. Note which brands appear. These are your comparison targets.", "xp": 10},
+            {
+                "n": 2, "title": "Create a comparison page", "xp": 30,
+                "detail": "Title: '[Your Brand] vs [Competitor]'. Include a feature table, pricing comparison, and honest pros/cons.",
+                "shopify": {
+                    "detail": "Go to Online Store → Pages → Add page\nTitle: 'Your Brand vs Competitor'\nUse the rich text editor to create:\n1. An intro paragraph\n2. A comparison table (use HTML: <table>)\n3. Sections for pricing, features, and reviews\n4. A clear conclusion\n\nAdd the page to your blog or navigation for discovery.",
+                },
+                "wordpress": {
+                    "detail": "Go to Posts → Add New (or Pages → Add New)\nTitle: 'Your Brand vs Competitor'\nUse the Block Editor:\n1. Add a Paragraph block for intro\n2. Add a Table block for comparison\n3. Add Heading blocks (H2) for each section\n4. Publish and add to your blog category\n\nInstall 'TablePress' plugin for more advanced comparison tables.",
+                },
+            },
+            {"n": 3, "title": "Be honest and specific", "detail": "Acknowledge competitor strengths. Use specific data: '30% faster shipping', 'Half the price'. Dishonest comparisons backfire with AI.", "xp": 15},
+            {"n": 4, "title": "Add FAQ schema", "detail": "Add FAQ section: 'Is [Your Brand] better than [Competitor]?' with a factual answer. Add FAQPage schema.", "xp": 10},
+        ],
+    },
+    "no_social_proof_numbers": {
+        "xp_reward": 50, "difficulty": "easy", "estimated_minutes": 10,
+        "steps": [
+            {"n": 1, "title": "Gather your proof points", "detail": "List: customer count, review score, units sold, press mentions, social followers, years in business. Use exact numbers.", "xp": 10},
+            {
+                "n": 2, "title": "Add prominently to your pages", "xp": 25,
+                "detail": "Place social proof above the fold — in the hero section or just below it.",
+                "shopify": {
+                    "detail": "Go to Online Store → Themes → Customize\n1. Add a 'Rich text' or 'Custom Liquid' section below the hero\n2. Add content like: '50,000+ happy customers | 4.9★ on Trustpilot | Featured in Vogue'\n3. For product pages: add a section showing review count and average rating above the description\n\nOr edit theme code: Sections → main-product.liquid → add trust badges HTML near the Add to Cart button.",
+                },
+                "wordpress": {
+                    "detail": "Edit your homepage in the Block Editor:\n1. Add a Columns block with 3-4 columns\n2. In each column: add a number (Heading block, large size) and label (Paragraph block)\n3. Example: '50,000+' / 'Happy Customers'\n\nFor product pages: edit the product template or use 'Elementor' widgets to add trust numbers near the buy button.",
+                },
+            },
+            {"n": 3, "title": "Keep numbers updated", "detail": "Set a monthly reminder to update customer counts and review scores. Stale numbers lose trust.", "xp": 15},
         ],
     },
 }
