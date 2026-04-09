@@ -638,7 +638,13 @@ class StartAnalysisView(APIView):
         serializer = StartAnalysisSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        data = serializer.validated_data
+        data = dict(serializer.validated_data)
+        verify_workspace = data.pop("verify_org_workspace", False)
+        cleaned_prompts = data.pop("_cleaned_prompts", None)
+        if cleaned_prompts is None:
+            cleaned_prompts = []
+        data.pop("prompts", None)
+
         email = data.get("email", "")
         org_id = data.get("org_id")
 
@@ -704,6 +710,7 @@ class StartAnalysisView(APIView):
             email=email,
             run_type=data["run_type"],
             status=AnalysisRun.Status.PENDING,
+            onboarding_prompts=list(cleaned_prompts) if verify_workspace else [],
         )
 
         # Start background task
@@ -2244,13 +2251,13 @@ class AutoFixApproveView(APIView):
 
 
 class AutoFixVerifyView(APIView):
-    """POST /api/analyzer/runs/s/<slug>/auto-fix/verify/ — re-crawl and verify a fix was implemented."""
+    """POST /api/analyzer/runs/s/<slug>/auto-fix/verify/ — re-fetch the page and verify the fix heuristically."""
     permission_classes = [AllowAny]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
         from .models import AutoFixJob
-        from .pipeline.verify import verify_finding
+        from .recommendation_verify import verify_recommendation_fix
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         rec_id = request.data.get("recommendation_id")
@@ -2263,32 +2270,37 @@ class AutoFixVerifyView(APIView):
         except Recommendation.DoesNotExist:
             return Response({"error": "Recommendation not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Re-crawl the page and check if the finding is fixed
-        result = verify_finding(
-            url=run.url,
-            finding_key=rec.finding_key,
-            pillar=rec.pillar,
-        )
-
-        fix_status = "verified" if result["verified"] else "failed"
-
-        # Create audit record
+        result = verify_recommendation_fix(run, rec)
+        st = result.get("status")
+        if st == "verified":
+            job_status = AutoFixJob.Status.VERIFIED
+        elif st == "manual":
+            job_status = AutoFixJob.Status.MANUAL
+        else:
+            job_status = AutoFixJob.Status.FAILED
         try:
             AutoFixJob.objects.create(
                 analysis_run=run,
                 recommendation=rec,
-                fix_type=rec.finding_key or "manual",
-                status=fix_status,
+                integration=None,
+                fix_type=result.get("fix_type") or "verification",
+                status=job_status,
                 response_data=result,
+                error_message=""
+                if st == "verified"
+                else (result.get("message") or "")[:500],
             )
         except Exception:
             logger.exception("Failed to create verify record (run=%s rec=%s)", run.id, rec.id)
 
-        return Response({
-            "recommendation_id": rec.id,
-            "status": fix_status,
-            "message": result["message"],
-        })
+        return Response(
+            {
+                "recommendation_id": rec.id,
+                "status": result.get("status", "failed"),
+                "message": result.get("message", ""),
+                "fix_type": result.get("fix_type", "verification"),
+            }
+        )
 
 
 # ── AI Chat (GEO Assistant with analysis context) ────────────────────────────
