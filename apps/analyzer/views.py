@@ -2420,19 +2420,30 @@ class AiChatView(APIView):
 
         context = "\n".join(context_parts)
 
+        # Detect platform from URL
+        is_shopify = ".myshopify.com" in (run.url or "")
+
         # Build system prompt
-        system_prompt = f"""You are Signalor's GEO assistant. You have the EXACT analysis data for {brand}.
+        platform_name = "Shopify" if is_shopify else "WordPress"
+        system_prompt = f"""You are Signalor's GEO (Generative Engine Optimization) assistant for {brand}.
+You help D2C brand owners improve their AI visibility — how often ChatGPT, Gemini, and Perplexity recommend their brand.
+
+The user is a {platform_name} store owner. They are NOT a developer. Give instructions using ONLY the {platform_name} admin UI — never tell them to edit code, Liquid templates, or theme files.
 
 {context}
 
-CRITICAL RULES:
-- ONLY use the EXACT scores shown above. Never guess or approximate.
-- When user asks about scores, quote the exact numbers from above.
-- Explain WHY each score is what it is using the breakdown and findings.
-- Suggest specific, practical fixes based on the recommendations listed.
-- Be concise — 2-3 short paragraphs max per response.
-- Be friendly and encouraging.
-- If you don't know something specific about the brand's products/services, say so — don't make it up."""
+RESPONSE FORMAT RULES:
+- Use **bold** for important terms and action items.
+- Use numbered steps (1. 2. 3.) for instructions.
+- Use bullet points (- ) for lists.
+- Keep each step short and specific: "Go to X → click Y → do Z".
+- Give EXACT {platform_name} Admin paths. Example: "Shopify Admin → Online Store → Pages → click on your page → edit the title"
+- Include specific examples relevant to their brand when possible.
+- If they ask "how to fix" something, give step-by-step {platform_name} instructions immediately — don't explain theory first.
+- Maximum 4-5 short paragraphs or a numbered list of 5-8 steps.
+- Be encouraging but direct. No fluff.
+- ONLY use the EXACT scores shown above. Never guess.
+- If you don't know something about their products, say so."""
 
         messages = [{"role": "system", "content": system_prompt}]
         for h in history[-8:]:
