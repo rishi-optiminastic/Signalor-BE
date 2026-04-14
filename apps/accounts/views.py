@@ -479,6 +479,70 @@ class DodoWebhookView(APIView):
         sub.save(update_fields=["last_invoice_payment_id"])
 
 
+class UsageView(APIView):
+    """GET /api/payments/usage/?email= — current usage vs plan limits."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from apps.organizations.models import Organization
+        from apps.analyzer.models import PromptTrack, AnalysisRun
+        from .subscription_utils import is_internal_email, get_plan_limits
+
+        email = request.query_params.get("email", "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        limits = get_plan_limits(email)
+        is_internal = is_internal_email(email)
+
+        # Projects (orgs) owned by this email
+        projects_used = Organization.objects.filter(owner_email=email).count()
+
+        # Prompts tracked across all runs for this email
+        prompts_used = PromptTrack.objects.filter(analysis_run__email=email).count()
+
+        # Analysis runs this month
+        from django.utils import timezone as tz
+        now = tz.now()
+        runs_this_month = AnalysisRun.objects.filter(
+            email=email,
+            created_at__year=now.year,
+            created_at__month=now.month,
+        ).count()
+
+        # Engines allowed on current plan
+        allowed_engines = limits.get("engines", [])
+
+        return Response({
+            "plan": "business" if is_internal else (
+                _get_sub_plan(email) if not is_internal else "business"
+            ),
+            "limits": {
+                "max_projects": limits["max_projects"],
+                "max_prompts": limits["max_prompts"],
+                "engines": allowed_engines,
+            },
+            "usage": {
+                "projects": projects_used,
+                "prompts": prompts_used,
+                "runs_this_month": runs_this_month,
+            },
+            "at_limit": {
+                "projects": projects_used >= limits["max_projects"],
+                "prompts": prompts_used >= limits["max_prompts"],
+            },
+        })
+
+
+def _get_sub_plan(email: str) -> str:
+    """Return plan key for an email, defaulting to starter."""
+    try:
+        sub = Subscription.objects.get(email=email)
+        return sub.plan if sub.is_active else "starter"
+    except Subscription.DoesNotExist:
+        return "starter"
+
+
 class PlanListView(APIView):
     """GET /api/plans/ — list all available plans."""
     permission_classes = [AllowAny]

@@ -5,26 +5,53 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseU
 PLAN_LIMITS = {
     "starter": {
         "label": "Starter",
-        "price_gbp": 19,
+        "price_gbp": 19.99,
         "max_projects": 1,
         "max_prompts": 25,
         # Gemini + Google SERP only — no ChatGPT / Perplexity / Claude (Pro+)
         "engines": ["gemini", "google"],
+        "features": [
+            "1 project",
+            "Up to 25 prompts",
+            "Gemini & Google prompt visibility",
+            "GEO analysis & scoring",
+            "Recommendations & verify",
+            "PDF report exports",
+        ],
     },
     "pro": {
         "label": "Pro",
-        "price_gbp": 49,
+        "price_gbp": 49.99,
         "max_projects": 3,
         "max_prompts": 75,
         # ChatGPT, Perplexity, Gemini, Google — Claude reserved for Max
         "engines": ["chatgpt", "gemini", "perplexity", "google"],
+        "features": [
+            "3 projects",
+            "Up to 75 prompts",
+            "ChatGPT, Gemini & Perplexity",
+            "Everything in Starter",
+            "Shopify & WordPress integration",
+            "Scheduled re-analysis",
+            "Score history & trends",
+            "Brand visibility tracking",
+        ],
     },
     "business": {
         "label": "Max",
-        "price_gbp": 59,
-        "max_projects": 6,
+        "price_gbp": 59.99,
+        "max_projects": 4,
         "max_prompts": 200,
         "engines": ["chatgpt", "gemini", "perplexity", "claude", "google"],
+        "features": [
+            "4 projects",
+            "Up to 200 prompts",
+            "All AI engines including Claude",
+            "Everything in Pro",
+            "Priority support",
+            "Advanced competitor analysis",
+            "Citation trend tracking",
+        ],
     },
 }
 
