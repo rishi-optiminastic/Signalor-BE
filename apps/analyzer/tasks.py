@@ -144,11 +144,19 @@ def _save_probes_and_tracks(
             for r in engine_results:
                 PromptResult.objects.create(prompt_track=track, **r)
 
-            # Compute and save score
-            all_results = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence"))
+            # Compute and save score + 5-factor breakdown
+            all_results = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
             score_data = compute_prompt_score(all_results)
             track.score = score_data["score"]
-            track.save(update_fields=["score"])
+            track.authority_score = score_data["authority_score"]
+            track.content_quality_score = score_data["content_quality_score"]
+            track.structural_score = score_data["structural_score"]
+            track.semantic_score = score_data["semantic_score"]
+            track.third_party_score = score_data["third_party_score"]
+            track.save(update_fields=[
+                "score", "authority_score", "content_quality_score",
+                "structural_score", "semantic_score", "third_party_score",
+            ])
         except Exception as exc:
             logger.warning("PromptTrack creation failed for run %d: %s", run.id, exc)
 

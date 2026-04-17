@@ -623,6 +623,14 @@ class PromptTrack(models.Model):
     prompt_text = models.TextField()
     is_custom = models.BooleanField(default=False)
     score = models.FloatField(default=0.0)
+
+    # 5-Factor AI Visibility Ranking Scores (all 0.0–1.0)
+    authority_score = models.FloatField(default=0.0)        # Factor 1 — 40% weight
+    content_quality_score = models.FloatField(default=0.0)  # Factor 2 — 35% weight
+    structural_score = models.FloatField(default=0.0)       # Factor 3 — 25% weight
+    semantic_score = models.FloatField(default=0.0)         # Factor 4 — supplementary
+    third_party_score = models.FloatField(default=0.0)      # Factor 5 — supplementary
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -636,6 +644,7 @@ class PromptResult(models.Model):
         GEMINI = "gemini", "Gemini"
         PERPLEXITY = "perplexity", "Perplexity"
         GOOGLE = "google", "Google"
+        BING = "bing", "Bing"
 
     class Sentiment(models.TextChoices):
         POSITIVE = "positive", "Positive"

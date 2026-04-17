@@ -9,7 +9,7 @@ PLAN_LIMITS = {
         "max_projects": 1,
         "max_prompts": 25,
         # Gemini + Google SERP only — no ChatGPT / Perplexity / Claude (Pro+)
-        "engines": ["gemini", "google"],
+        "engines": ["gemini", "google", "bing"],
         "features": [
             "1 project",
             "Up to 25 prompts",
@@ -24,8 +24,8 @@ PLAN_LIMITS = {
         "price_gbp": 49.99,
         "max_projects": 3,
         "max_prompts": 75,
-        # ChatGPT, Perplexity, Gemini, Google — Claude reserved for Max
-        "engines": ["chatgpt", "gemini", "perplexity", "google"],
+        # ChatGPT, Perplexity, Gemini, Google, Bing — Claude reserved for Max
+        "engines": ["chatgpt", "gemini", "perplexity", "google", "bing"],
         "features": [
             "3 projects",
             "Up to 75 prompts",
@@ -42,7 +42,7 @@ PLAN_LIMITS = {
         "price_gbp": 59.99,
         "max_projects": 6,
         "max_prompts": 200,
-        "engines": ["chatgpt", "gemini", "perplexity", "claude", "google"],
+        "engines": ["chatgpt", "gemini", "perplexity", "claude", "google", "bing"],
         "features": [
             "6 projects",
             "Up to 200 prompts",

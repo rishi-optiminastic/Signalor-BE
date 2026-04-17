@@ -1760,6 +1760,21 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
         for r in engine_results:
             PromptResult.objects.create(prompt_track=track, **r)
         logger.info("PromptTrack #%d: %d engine results saved", track.pk, len(engine_results))
+
+        # Compute and persist 5-factor scores
+        from .pipeline.prompt_tracker import compute_prompt_score
+        all_res = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
+        sd = compute_prompt_score(all_res)
+        track.score = sd["score"]
+        track.authority_score = sd["authority_score"]
+        track.content_quality_score = sd["content_quality_score"]
+        track.structural_score = sd["structural_score"]
+        track.semantic_score = sd["semantic_score"]
+        track.third_party_score = sd["third_party_score"]
+        track.save(update_fields=[
+            "score", "authority_score", "content_quality_score",
+            "structural_score", "semantic_score", "third_party_score",
+        ])
     except Exception as exc:
         logger.warning("PromptTrack #%d fire failed: %s", track.pk, exc)
 

@@ -408,6 +408,12 @@ class PromptTrackSerializer(serializers.ModelSerializer):
     ranking_label = serializers.SerializerMethodField()
     total_runs = serializers.SerializerMethodField()
     mentions = serializers.SerializerMethodField()
+    # 5-factor breakdown (computed live so they reflect the latest results)
+    factor_authority = serializers.SerializerMethodField()
+    factor_content_quality = serializers.SerializerMethodField()
+    factor_structural = serializers.SerializerMethodField()
+    factor_semantic = serializers.SerializerMethodField()
+    factor_third_party = serializers.SerializerMethodField()
 
     class Meta:
         model = PromptTrack
@@ -415,12 +421,15 @@ class PromptTrackSerializer(serializers.ModelSerializer):
             "id", "prompt_text", "is_custom", "score", "created_at", "results",
             "visibility_pct", "avg_position", "sentiment_label", "ranking_label",
             "total_runs", "mentions",
+            # 5-factor scores
+            "factor_authority", "factor_content_quality", "factor_structural",
+            "factor_semantic", "factor_third_party",
         ]
 
     def _score_data(self, obj):
         if not hasattr(obj, "_score_cache"):
             from .pipeline.prompt_tracker import compute_prompt_score
-            results = list(obj.results.values("brand_mentioned", "sentiment", "rank_position", "confidence"))
+            results = list(obj.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
             obj._score_cache = compute_prompt_score(results)
         return obj._score_cache
 
@@ -432,6 +441,21 @@ class PromptTrackSerializer(serializers.ModelSerializer):
 
     def get_sentiment_label(self, obj):
         return self._score_data(obj)["sentiment"]
+
+    def get_factor_authority(self, obj):
+        return self._score_data(obj)["authority_score"]
+
+    def get_factor_content_quality(self, obj):
+        return self._score_data(obj)["content_quality_score"]
+
+    def get_factor_structural(self, obj):
+        return self._score_data(obj)["structural_score"]
+
+    def get_factor_semantic(self, obj):
+        return self._score_data(obj)["semantic_score"]
+
+    def get_factor_third_party(self, obj):
+        return self._score_data(obj)["third_party_score"]
 
     def get_ranking_label(self, obj):
         return self._score_data(obj)["label"]
