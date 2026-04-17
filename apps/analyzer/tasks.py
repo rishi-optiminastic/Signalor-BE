@@ -12,7 +12,8 @@ from .models import (
     PromptTrack,
     PromptResult,
 )
-from .pipeline.brand_visibility import extract_brand_name, run_brand_visibility
+from .pipeline.brand_naming import visibility_brand_label
+from .pipeline.brand_visibility import run_brand_visibility
 from .pipeline.aggregator import compute_composite, compute_static_composite, detect_industry
 from .pipeline.ai_visibility import score_ai_visibility
 from .pipeline.competitors import discover_competitors
@@ -86,28 +87,48 @@ def _save_probes_and_tracks(
     industry: str = "", country: str = "",
 ):
     """Save AIVisibilityProbe rows and generate AI-powered brand-specific prompt tracks."""
+    from apps.accounts.subscription_utils import get_plan_limits, is_plan_limits_enforcement_enabled
+
     from .pipeline.prompt_tracker import generate_brand_prompts, fire_prompt_across_engines, compute_prompt_score
 
     # Save visibility probes
     for probe in probes_data:
         AIVisibilityProbe.objects.create(analysis_run=run, **probe)
 
-    # Generate 10 brand-relevant prompts using AI with FULL context
-    try:
-        brand_prompts = generate_brand_prompts(
-            brand_name=brand_name,
-            brand_url=brand_url,
-            industry=industry,
-            page_content=crawl_text,
-            meta_description=meta_description,
-            products=site_pages,
-            location="",
-            country=country,
-            count=10,
-        )
-    except Exception as exc:
-        logger.warning("AI prompt generation failed for run %d: %s", run.id, exc)
+    em = (run.email or "").strip().lower()
+    limits = get_plan_limits(run.email)
+    allowed_engines = limits["engines"] if is_plan_limits_enforcement_enabled() and em else None
+    if is_plan_limits_enforcement_enabled() and em:
+        cur = PromptTrack.objects.filter(analysis_run__email=em).count()
+        slots = max(0, limits["max_prompts"] - cur)
+        gen_count = min(10, slots)
+    else:
+        gen_count = 10
+
+    stored = list(run.onboarding_prompts or []) if getattr(run, "onboarding_prompts", None) else []
+    stored = [p.strip() for p in stored if isinstance(p, str) and p.strip()]
+
+    if gen_count == 0:
         brand_prompts = []
+    elif stored:
+        brand_prompts = stored[:gen_count]
+    else:
+        try:
+            brand_prompts = generate_brand_prompts(
+                brand_name=brand_name,
+                brand_url=brand_url,
+                industry=industry,
+                page_content=crawl_text,
+                meta_description=meta_description,
+                products=site_pages,
+                location="",
+                country=country,
+                count=gen_count,
+            )
+        except Exception as exc:
+            logger.warning("AI prompt generation failed for run %d: %s", run.id, exc)
+            brand_prompts = []
+        brand_prompts = brand_prompts[:gen_count]
 
     # Fire each AI-generated prompt and save results
     for prompt_text in brand_prompts:
@@ -117,15 +138,25 @@ def _save_probes_and_tracks(
                 prompt_text=prompt_text,
                 is_custom=False,
             )
-            engine_results = fire_prompt_across_engines(prompt_text, brand_name, brand_url, runs=1)
+            engine_results = fire_prompt_across_engines(
+                prompt_text, brand_name, brand_url, runs=1, allowed_engines=allowed_engines
+            )
             for r in engine_results:
                 PromptResult.objects.create(prompt_track=track, **r)
 
-            # Compute and save score
-            all_results = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence"))
+            # Compute and save score + 5-factor breakdown
+            all_results = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
             score_data = compute_prompt_score(all_results)
             track.score = score_data["score"]
-            track.save(update_fields=["score"])
+            track.authority_score = score_data["authority_score"]
+            track.content_quality_score = score_data["content_quality_score"]
+            track.structural_score = score_data["structural_score"]
+            track.semantic_score = score_data["semantic_score"]
+            track.third_party_score = score_data["third_party_score"]
+            track.save(update_fields=[
+                "score", "authority_score", "content_quality_score",
+                "structural_score", "semantic_score", "third_party_score",
+            ])
         except Exception as exc:
             logger.warning("PromptTrack creation failed for run %d: %s", run.id, exc)
 
@@ -206,8 +237,8 @@ def _run_partial_analysis(run: AnalysisRun, crawl):
     ai_vis_score, ai_vis_details, probes_data = 0.0, {}, []
     brand_vis_result = None
 
-    brand_name = run.brand_name or extract_brand_name(run.url)
-    if not run.brand_name and brand_name:
+    brand_name = visibility_brand_label(run.url, run.brand_name)
+    if run.brand_name != brand_name:
         run.brand_name = brand_name
         run.save(update_fields=["brand_name"])
 
@@ -446,9 +477,9 @@ def run_single_page_analysis(run_id: int):
 
         _update_status(run, AnalysisRun.Status.ANALYZING, 30)
 
-        # Derive brand name
-        brand_name = run.brand_name or extract_brand_name(run.url)
-        if not run.brand_name and brand_name:
+        # Derive brand label from URL (corrects generic / mismatched stored names)
+        brand_name = visibility_brand_label(run.url, run.brand_name)
+        if run.brand_name != brand_name:
             run.brand_name = brand_name
             run.save(update_fields=["brand_name"])
 

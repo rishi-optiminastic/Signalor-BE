@@ -43,6 +43,8 @@ class AnalysisRun(models.Model):
     composite_score = models.FloatField(null=True, blank=True)
     content_hash = models.CharField(max_length=64, blank=True, default="")
     error_message = models.TextField(blank=True, default="")
+    # User-selected prompts from verified onboarding / post-checkout launch (empty for other flows)
+    onboarding_prompts = models.JSONField(default=list, blank=True)
     llm_logs = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -151,7 +153,16 @@ class Recommendation(models.Model):
     action = models.TextField()
     impact_estimate = models.CharField(max_length=100, blank=True, default="")
     category = models.CharField(max_length=30)
+    # Stable pipeline key (e.g. no_citations) for verify routing; blank for legacy rows.
+    finding_code = models.CharField(max_length=80, blank=True, default="")
     why = models.CharField(max_length=200, blank=True, default="")
+    # Structured step-by-step guide + gamification metadata
+    steps = models.JSONField(default=list, blank=True)
+    xp_reward = models.IntegerField(default=0)
+    difficulty = models.CharField(max_length=20, blank=True, default="")  # easy, medium, hard
+    estimated_minutes = models.IntegerField(default=0)
+    # The finding key that triggered this recommendation (e.g. "no_h1", "no_citations")
+    finding_key = models.CharField(max_length=80, blank=True, default="")
 
     class Meta:
         ordering = ["priority", "pillar"]
@@ -172,6 +183,16 @@ class BrandVisibility(models.Model):
     medium_details = models.JSONField(default=dict)
     web_mentions_score = models.FloatField(default=0)
     web_mentions_details = models.JSONField(default=dict)
+    social_presence_details = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Instagram/Facebook public metrics and derived presence scores",
+    )
+    ai_brand_facts = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="LLM-grounded notes on how AI may reflect the brand from visibility signals",
+    )
     overall_score = models.FloatField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -602,6 +623,14 @@ class PromptTrack(models.Model):
     prompt_text = models.TextField()
     is_custom = models.BooleanField(default=False)
     score = models.FloatField(default=0.0)
+
+    # 5-Factor AI Visibility Ranking Scores (all 0.0–1.0)
+    authority_score = models.FloatField(default=0.0)        # Factor 1 — 40% weight
+    content_quality_score = models.FloatField(default=0.0)  # Factor 2 — 35% weight
+    structural_score = models.FloatField(default=0.0)       # Factor 3 — 25% weight
+    semantic_score = models.FloatField(default=0.0)         # Factor 4 — supplementary
+    third_party_score = models.FloatField(default=0.0)      # Factor 5 — supplementary
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -615,6 +644,7 @@ class PromptResult(models.Model):
         GEMINI = "gemini", "Gemini"
         PERPLEXITY = "perplexity", "Perplexity"
         GOOGLE = "google", "Google"
+        BING = "bing", "Bing"
 
     class Sentiment(models.TextChoices):
         POSITIVE = "positive", "Positive"
@@ -873,6 +903,7 @@ class AutoFixJob(models.Model):
         FAILED = "failed"
         MANUAL = "manual"
         SKIPPED = "skipped"
+        VERIFIED = "verified"
 
     class FixType(models.TextChoices):
         SCHEMA_MARKUP = "schema_markup"
@@ -886,9 +917,10 @@ class AutoFixJob(models.Model):
         Recommendation, on_delete=models.CASCADE, related_name="auto_fix_jobs"
     )
     integration = models.ForeignKey(
-        "integrations.Integration", on_delete=models.CASCADE, related_name="auto_fix_jobs"
+        "integrations.Integration", on_delete=models.CASCADE, related_name="auto_fix_jobs",
+        null=True, blank=True,
     )
-    fix_type = models.CharField(max_length=30, choices=FixType.choices)
+    fix_type = models.CharField(max_length=30)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     payload_sent = models.JSONField(default=dict, blank=True)
     response_data = models.JSONField(default=dict, blank=True)

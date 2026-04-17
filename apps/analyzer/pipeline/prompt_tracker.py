@@ -1,9 +1,15 @@
 """
-Prompt ranking engine — fires prompts across AI engines multiple times,
-extracts signals, computes weighted scores, and ranks prompts.
+Prompt ranking engine — fires prompts across AI engines + search engines,
+extracts signals, and computes 5-factor weighted AI visibility scores.
 
-Inspired by Peec.ai's prompt ranking mechanism:
-  Score = (Visibility × 0.5) + (Position Score × 0.3) + (Sentiment × 0.2)
+5-Factor Scoring (2026 AI Visibility Framework):
+  Factor 1 — Authority & Credibility       (40% weight)
+  Factor 2 — Content Quality & Utility     (35% weight)
+  Factor 3 — Structural Extractability     (25% weight)
+  Factor 4 — Semantic Alignment            (supplementary)
+  Factor 5 — Third-Party Validation        (supplementary)
+
+  Final Score = authority×0.40 + content_quality×0.35 + structural×0.25
 """
 import json
 import logging
@@ -15,9 +21,129 @@ _ENGINE_MAP = {
     "gpt": "chatgpt",
     "claude": "claude",
     "gemini": "gemini",
+    "perplexity": "perplexity",
 }
 
 DEFAULT_RUNS = 3  # Fire each prompt N times to handle AI randomness
+
+
+def _providers_and_search_from_plan_engines(allowed_engines: list[str] | None) -> tuple[list[str], bool, bool]:
+    """
+    Map PLAN_LIMITS engine ids to OpenRouter provider keys and whether to run
+    Google (Serper) and/or Bing searches.
+
+    Returns: (provider_keys, include_google, include_bing)
+    If allowed_engines is None, use full stack.
+    """
+    if allowed_engines is None:
+        return (["gpt", "claude", "gemini", "perplexity"], True, True)
+    s = {e.strip().lower() for e in allowed_engines if e}
+    provs: list[str] = []
+    if "chatgpt" in s:
+        provs.append("gpt")
+    if "gemini" in s:
+        provs.append("gemini")
+    if "claude" in s:
+        provs.append("claude")
+    if "perplexity" in s:
+        provs.append("perplexity")
+    include_google = "google" in s
+    include_bing = "bing" in s
+    if not provs and not include_google and not include_bing:
+        provs = ["gemini"]
+    return (provs, include_google, include_bing)
+
+
+# Keep old name as alias so existing callers (tasks.py etc.) don't break
+def _providers_and_google_from_plan_engines(allowed_engines: list[str] | None) -> tuple[list[str], bool]:
+    provs, include_google, _ = _providers_and_search_from_plan_engines(allowed_engines)
+    return (provs, include_google)
+
+
+def _search_bing(query: str, brand_name: str, brand_url: str) -> dict:
+    """
+    Search Bing via the Azure Bing Web Search API and check if brand appears.
+    Requires BING_API_KEY env var (Azure Cognitive Services key).
+
+    Returns a PromptResult-compatible dict with engine="bing", or None on failure.
+    """
+    import os
+    import requests as _requests
+    from urllib.parse import urlparse
+
+    api_key = os.getenv("BING_API_KEY", "")
+    if not api_key:
+        return None
+
+    try:
+        resp = _requests.get(
+            "https://api.bing.microsoft.com/v7.0/search",
+            headers={"Ocp-Apim-Subscription-Key": api_key},
+            params={"q": query, "count": 10, "textDecorations": False},
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.warning("Bing search failed: %d", resp.status_code)
+            return None
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("Bing search error: %s", exc)
+        return None
+
+    brand_lower = brand_name.lower()
+    domain = urlparse(brand_url).netloc.lower().replace("www.", "")
+    web_pages = data.get("webPages", {}).get("value", [])
+    answer_box = data.get("computation", {}) or data.get("answerBox", {})
+    entities = data.get("entities", {}).get("value", [])
+
+    mentioned = False
+    rank_position = 0
+    response_parts = []
+
+    # Entity knowledge panel
+    for entity in entities[:2]:
+        name = (entity.get("name", "")).lower()
+        desc = (entity.get("description", "")).lower()
+        if brand_lower in name or brand_lower in desc or domain in name:
+            mentioned = True
+            rank_position = 1
+            response_parts.append(f"[Entity] {entity.get('name', '')}: {entity.get('description', '')}")
+
+    # Organic results
+    for i, result in enumerate(web_pages[:10], 1):
+        title = (result.get("name", "")).lower()
+        snippet = (result.get("snippet", "")).lower()
+        link = (result.get("url", "")).lower()
+        result_domain = urlparse(link).netloc.lower().replace("www.", "")
+
+        if brand_lower in title or brand_lower in snippet or domain == result_domain:
+            mentioned = True
+            if rank_position == 0:
+                rank_position = i
+            response_parts.append(f"[#{i}] {result.get('name', '')} — {result.get('snippet', '')}")
+        else:
+            response_parts.append(f"[#{i}] {result.get('name', '')}")
+
+    sentiment = "neutral"
+    if mentioned:
+        combined = " ".join(response_parts).lower()
+        pos_words = ["best", "top", "leading", "recommend", "popular", "trusted", "great", "excellent"]
+        neg_words = ["worst", "avoid", "poor", "bad", "scam", "issue", "problem"]
+        pos_count = sum(1 for w in pos_words if w in combined)
+        neg_count = sum(1 for w in neg_words if w in combined)
+        if pos_count > neg_count:
+            sentiment = "positive"
+        elif neg_count > pos_count:
+            sentiment = "negative"
+
+    return {
+        "engine": "bing",
+        "response_text": "\n".join(response_parts[:5])[:3000],
+        "brand_mentioned": mentioned,
+        "sentiment": sentiment,
+        "confidence": 1.0 if mentioned else 0.0,
+        "rank_position": rank_position,
+    }
 
 
 def _search_google_serper(query: str, brand_name: str, brand_url: str) -> dict:
@@ -240,30 +366,38 @@ def fire_prompt_across_engines(
     brand_name: str,
     brand_url: str,
     runs: int = DEFAULT_RUNS,
+    allowed_engines: list[str] | None = None,
 ) -> list[dict]:
     """
-    Fire prompt_text to GPT/Claude/Gemini multiple times to handle randomness.
+    Fire prompt_text to all AI models (GPT/Claude/Gemini/Perplexity) multiple
+    times plus Google and Bing search engines to handle randomness and gather
+    multi-source ranking signals.
 
-    With runs=3 and 3 engines → 9 total results.
+    With runs=3 and 4 LLMs + Google + Bing → up to 14 total results.
+    allowed_engines: PLAN_LIMITS["engines"] list; None = all configured.
     Returns list of dicts: engine, response_text, brand_mentioned, sentiment, confidence, rank_position
     """
     from .llm import ask_multiple_llms
     from .ai_visibility import _build_brand_aliases, _match_brand, _analyze_mention_quality, _check_ranking_position
 
+    provider_keys, include_google, include_bing = _providers_and_search_from_plan_engines(allowed_engines)
+
     brand_aliases = _build_brand_aliases(brand_name, brand_url)
     all_results = []
 
     for run_idx in range(runs):
-        try:
-            responses = ask_multiple_llms(
-                prompt_text,
-                providers=["gpt", "claude", "gemini"],
-                purpose=f"Prompt Track (run {run_idx + 1}/{runs})",
-                max_tokens=512,
-            )
-        except Exception as exc:
-            logger.warning("fire_prompt run %d failed: %s", run_idx + 1, exc)
-            continue
+        responses: dict[str, str] = {}
+        if provider_keys:
+            try:
+                responses = ask_multiple_llms(
+                    prompt_text,
+                    providers=provider_keys,
+                    purpose=f"Prompt Track (run {run_idx + 1}/{runs})",
+                    max_tokens=512,
+                )
+            except Exception as exc:
+                logger.warning("fire_prompt run %d failed: %s", run_idx + 1, exc)
+                continue
 
         for provider_key, response_text in responses.items():
             engine = _ENGINE_MAP.get(provider_key, provider_key)
@@ -298,22 +432,45 @@ def fire_prompt_across_engines(
                 "rank_position": rank_position,
             })
 
-    # Also search Google via Serper (once per prompt, not per run)
-    google_result = _search_google_serper(prompt_text, brand_name, brand_url)
-    if google_result:
-        all_results.append(google_result)
+    # Search engines run once per prompt (not per run) for authoritative signals
+    if include_google:
+        google_result = _search_google_serper(prompt_text, brand_name, brand_url)
+        if google_result:
+            all_results.append(google_result)
+
+    if include_bing:
+        bing_result = _search_bing(prompt_text, brand_name, brand_url)
+        if bing_result:
+            all_results.append(bing_result)
 
     return all_results
 
 
 def compute_prompt_score(results: list[dict]) -> dict:
     """
-    Compute weighted prompt ranking score from multiple results.
+    Compute 5-factor AI visibility ranking score from multi-engine results.
 
-    Score = (Visibility × 0.5) + (Position Score × 0.3) + (Sentiment × 0.2)
+    2026 AI Visibility Ranking Framework:
 
-    Returns dict with: score, visibility_pct, avg_position, sentiment, label
+    Factor 1 — Authority & Credibility (40%)
+      Cross-engine coverage × 0.50 + mention rate × 0.30 + avg confidence × 0.20
+
+    Factor 2 — Content Quality & Utility (35%)
+      Positive sentiment rate × 0.60 + normalised sentiment × 0.40
+
+    Factor 3 — Structural Extractability (25%)
+      Top-3 position rate × 0.50 + avg inverse-position score × 0.50
+
+    Factor 4 — Semantic Alignment (supplementary)
+      mention_rate × avg_confidence_when_mentioned
+
+    Factor 5 — Third-Party Validation (supplementary)
+      Google/Bing mention weight (0.40) + AI cross-engine coverage (0.60)
+
+    Final: score = authority×0.40 + content_quality×0.35 + structural×0.25
     """
+    _SEARCH_ENGINES = {"google", "bing"}
+
     if not results:
         return {
             "score": 0.0,
@@ -323,32 +480,90 @@ def compute_prompt_score(results: list[dict]) -> dict:
             "label": "Weak",
             "total_runs": 0,
             "mentions": 0,
+            "authority_score": 0.0,
+            "content_quality_score": 0.0,
+            "structural_score": 0.0,
+            "semantic_score": 0.0,
+            "third_party_score": 0.0,
         }
 
     total = len(results)
     mentions = sum(1 for r in results if r.get("brand_mentioned"))
+    mention_rate = mentions / total if total else 0.0
 
-    # Visibility: % of runs where brand appears (0-1)
-    visibility = mentions / total if total else 0
-
-    # Position Score: average 1/position (higher = better)
-    positions = [r.get("rank_position", 0) for r in results if r.get("rank_position", 0) > 0]
-    avg_position_score = (sum(1.0 / p for p in positions) / len(positions)) if positions else 0
-
-    # Sentiment: +1 positive, 0 neutral, -1 negative → normalize to 0-1
+    # ── Shared signal helpers ──────────────────────────────────────────────
     sentiment_map = {"positive": 1, "neutral": 0, "negative": -1}
-    sentiments = [sentiment_map.get(r.get("sentiment", "neutral"), 0) for r in results]
-    raw_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
-    norm_sentiment = (raw_sentiment + 1) / 2  # -1..1 → 0..1
+    raw_sentiments = [sentiment_map.get(r.get("sentiment", "neutral"), 0) for r in results]
+    raw_sentiment_avg = sum(raw_sentiments) / len(raw_sentiments) if raw_sentiments else 0.0
+    norm_sentiment = (raw_sentiment_avg + 1) / 2  # −1..1 → 0..1
 
-    # Weighted score
-    score = (visibility * 0.5) + (avg_position_score * 0.3) + (norm_sentiment * 0.2)
-    score = min(score, 1.0)  # Cap at 1.0
+    all_engines = {r.get("engine") for r in results if r.get("engine")}
+    cited_engines = {r.get("engine") for r in results if r.get("brand_mentioned") and r.get("engine")}
+    engine_coverage = len(cited_engines) / len(all_engines) if all_engines else 0.0
 
-    # Determine overall sentiment label
-    if raw_sentiment > 0.3:
+    avg_confidence = (
+        sum(r.get("confidence", 0.0) for r in results) / total if total else 0.0
+    )
+    avg_confidence_when_mentioned = (
+        sum(r.get("confidence", 0.0) for r in results if r.get("brand_mentioned")) / mentions
+        if mentions else 0.0
+    )
+
+    # Position helpers
+    positions = [r.get("rank_position", 0) for r in results if r.get("rank_position", 0) > 0]
+    top3_count = sum(1 for p in positions if p <= 3)
+    top3_rate = top3_count / total if total else 0.0
+    avg_inv_pos = (sum(1.0 / p for p in positions) / len(positions)) if positions else 0.0
+
+    # Positive/negative sentiment counts
+    pos_count = sum(1 for r in results if r.get("sentiment") == "positive")
+    pos_rate = pos_count / total if total else 0.0
+
+    # ── Factor 1: Authority & Credibility (40%) ───────────────────────────
+    authority_score = min(
+        engine_coverage * 0.50 + mention_rate * 0.30 + avg_confidence * 0.20,
+        1.0,
+    )
+
+    # ── Factor 2: Content Quality & Utility (35%) ─────────────────────────
+    content_quality_score = min(
+        pos_rate * 0.60 + norm_sentiment * 0.40,
+        1.0,
+    )
+
+    # ── Factor 3: Structural Extractability (25%) ─────────────────────────
+    structural_score = min(
+        top3_rate * 0.50 + min(avg_inv_pos, 1.0) * 0.50,
+        1.0,
+    )
+
+    # ── Factor 4: Semantic Alignment (supplementary) ──────────────────────
+    semantic_score = min(mention_rate * avg_confidence_when_mentioned, 1.0)
+
+    # ── Factor 5: Third-Party Validation (supplementary) ─────────────────
+    search_results = [r for r in results if r.get("engine") in _SEARCH_ENGINES]
+    search_mentioned = any(r.get("brand_mentioned") for r in search_results)
+    search_signal = 1.0 if search_mentioned else 0.0
+
+    ai_results = [r for r in results if r.get("engine") not in _SEARCH_ENGINES]
+    ai_engines_all = {r.get("engine") for r in ai_results}
+    ai_engines_cited = {r.get("engine") for r in ai_results if r.get("brand_mentioned")}
+    ai_coverage = len(ai_engines_cited) / len(ai_engines_all) if ai_engines_all else 0.0
+
+    third_party_score = min(search_signal * 0.40 + ai_coverage * 0.60, 1.0)
+
+    # ── Composite score ───────────────────────────────────────────────────
+    score = min(
+        authority_score * 0.40
+        + content_quality_score * 0.35
+        + structural_score * 0.25,
+        1.0,
+    )
+
+    # Sentiment label
+    if raw_sentiment_avg > 0.3:
         sentiment_label = "positive"
-    elif raw_sentiment < -0.3:
+    elif raw_sentiment_avg < -0.3:
         sentiment_label = "negative"
     else:
         sentiment_label = "neutral"
@@ -361,14 +576,22 @@ def compute_prompt_score(results: list[dict]) -> dict:
     else:
         label = "Weak"
 
+    avg_display_position = round(1.0 / avg_inv_pos, 1) if avg_inv_pos > 0 else 0
+
     return {
         "score": round(score, 3),
-        "visibility_pct": round(visibility * 100, 1),
-        "avg_position": round(1.0 / avg_position_score, 1) if avg_position_score > 0 else 0,
+        "visibility_pct": round(mention_rate * 100, 1),
+        "avg_position": avg_display_position,
         "sentiment": sentiment_label,
         "label": label,
         "total_runs": total,
         "mentions": mentions,
+        # 5-factor breakdown
+        "authority_score": round(authority_score, 3),
+        "content_quality_score": round(content_quality_score, 3),
+        "structural_score": round(structural_score, 3),
+        "semantic_score": round(semantic_score, 3),
+        "third_party_score": round(third_party_score, 3),
     }
 
 
@@ -381,9 +604,18 @@ def recheck_track(track, brand_name: str, brand_url: str) -> int:
     """
     from django.db import close_old_connections
     from apps.analyzer.models import PromptResult
+    from apps.accounts.subscription_utils import get_plan_limits, is_plan_limits_enforcement_enabled
 
     close_old_connections()
-    engine_results = fire_prompt_across_engines(track.prompt_text, brand_name, brand_url)
+    email = (track.analysis_run.email or "").strip()
+    allowed = (
+        get_plan_limits(email)["engines"]
+        if is_plan_limits_enforcement_enabled() and email
+        else None
+    )
+    engine_results = fire_prompt_across_engines(
+        track.prompt_text, brand_name, brand_url, allowed_engines=allowed
+    )
     created = 0
     for r in engine_results:
         PromptResult.objects.create(prompt_track=track, **r)
@@ -391,11 +623,19 @@ def recheck_track(track, brand_name: str, brand_url: str) -> int:
 
     # Compute and save score from ALL results (not just this run)
     all_results = list(
-        track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence")
+        track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine")
     )
     score_data = compute_prompt_score(all_results)
     track.score = score_data["score"]
-    track.save(update_fields=["score"])
+    track.authority_score = score_data["authority_score"]
+    track.content_quality_score = score_data["content_quality_score"]
+    track.structural_score = score_data["structural_score"]
+    track.semantic_score = score_data["semantic_score"]
+    track.third_party_score = score_data["third_party_score"]
+    track.save(update_fields=[
+        "score", "authority_score", "content_quality_score",
+        "structural_score", "semantic_score", "third_party_score",
+    ])
 
     logger.info(
         "recheck_track #%d ('%s'): %d new results, score=%.3f (%s)",

@@ -27,6 +27,7 @@ class RecommendationSerializer(serializers.ModelSerializer):
         fields = [
             "id", "pillar", "priority", "title", "description",
             "action", "impact_estimate", "category", "can_auto_fix", "why",
+            "steps", "xp_reward", "difficulty", "estimated_minutes", "finding_code", "finding_key",
         ]
 
     # Title keywords that indicate manual-only recommendations
@@ -37,11 +38,52 @@ class RecommendationSerializer(serializers.ModelSerializer):
         "brand into ai", "social profile", "brand website signal",
     ]
 
+    # Fix types that can actually be auto-applied on any URL
+    AUTO_FIX_TITLE_KEYWORDS = [
+        "llms.txt", "robots.txt", "ai meta", "ai-meta", "ai crawler",
+        "ai bot", "gptbot", "claudebot", "noindex",
+    ]
+
+    # Fix types that need a product/page URL — cannot auto-fix on homepage
+    HOMEPAGE_MANUAL_TITLE_KEYWORDS = [
+        "meta description", "seo title", "title tag", "meta title",
+        "json-ld", "structured data", "schema",
+        "faq", "expert quote", "author attribution", "first-hand",
+        "about page", "contact page", "content", "keyword stuff",
+        "review", "comparison", "shipping", "product description",
+    ]
+
     def get_can_auto_fix(self, obj):
         title_lower = (obj.title or "").lower()
+        cat_lower = (obj.category or "").lower()
+
+        # Always manual
         for kw in self.MANUAL_TITLE_KEYWORDS:
             if kw in title_lower:
                 return False
+
+        # Check if this is a homepage analysis
+        run = obj.analysis_run
+        run_url = (run.url or "") if run else ""
+        is_homepage = False
+        if run_url:
+            try:
+                from urllib.parse import urlparse
+                path = urlparse(run_url).path.rstrip("/")
+                is_homepage = not path or path == ""
+            except Exception:
+                pass
+
+        # On homepage: only specific fix types can auto-apply
+        if is_homepage:
+            for kw in self.AUTO_FIX_TITLE_KEYWORDS:
+                if kw in title_lower:
+                    return True
+            # Schema category on homepage = theme extension (auto)
+            # but schema issues like "missing schema" on homepage = manual
+            return False
+
+        # On product/page URLs: most things can be auto-fixed
         return True
 
 
@@ -72,6 +114,8 @@ class BrandVisibilitySerializer(serializers.ModelSerializer):
             "reddit_score", "reddit_details",
             "medium_score", "medium_details",
             "web_mentions_score", "web_mentions_details",
+            "social_presence_details",
+            "ai_brand_facts",
             "overall_score",
         ]
 
@@ -104,15 +148,21 @@ class AnalysisRunDetailSerializer(serializers.ModelSerializer):
     recommendations = RecommendationSerializer(many=True, read_only=True)
     ai_probes = AIVisibilityProbeSerializer(many=True, read_only=True)
     brand_visibility = BrandVisibilitySerializer(read_only=True)
+    display_brand_name = serializers.SerializerMethodField()
 
     class Meta:
         model = AnalysisRun
         fields = [
-            "id", "slug", "url", "brand_name", "country", "email", "run_type", "status", "progress",
+            "id", "slug", "url", "brand_name", "display_brand_name", "country", "email", "run_type", "status", "progress",
             "composite_score", "error_message", "created_at", "updated_at",
             "page_scores", "competitors", "recommendations", "ai_probes",
             "brand_visibility", "llm_logs",
         ]
+
+    def get_display_brand_name(self, obj):
+        from apps.analyzer.pipeline.brand_naming import visibility_brand_label
+
+        return visibility_brand_label(getattr(obj, "url", "") or "", getattr(obj, "brand_name", "") or "")
 
 
 class StartAnalysisSerializer(serializers.Serializer):
@@ -129,6 +179,13 @@ class StartAnalysisSerializer(serializers.Serializer):
         max_length=100, required=False, allow_blank=True, default=""
     )
     org_id = serializers.IntegerField(required=False, allow_null=True)
+    # When true (onboarding / post-checkout launch), require org ownership, URL match, brand, and prompts.
+    verify_org_workspace = serializers.BooleanField(required=False, default=False)
+    prompts = serializers.ListField(
+        child=serializers.CharField(max_length=500),
+        required=False,
+        allow_empty=True,
+    )
 
     def validate_url(self, value):
         value = value.strip()
@@ -141,6 +198,80 @@ class StartAnalysisSerializer(serializers.Serializer):
 
     def validate_country(self, value):
         return value.strip() if value else ""
+
+    def validate(self, attrs):
+        from apps.organizations.models import Organization
+
+        from .workspace_urls import normalize_workspace_url
+
+        verify = attrs.get("verify_org_workspace") is True
+        raw_prompts = attrs.get("prompts")
+        if not raw_prompts:
+            raw_prompts = []
+        cleaned = [
+            p.strip()
+            for p in raw_prompts
+            if isinstance(p, str) and p.strip()
+        ]
+        if len(cleaned) > 15:
+            raise serializers.ValidationError(
+                {"prompts": "You can track at most 15 prompts."}
+            )
+
+        if verify:
+            org_id = attrs.get("org_id")
+            if not org_id:
+                raise serializers.ValidationError(
+                    {
+                        "org_id": "Create your workspace first, then launch analysis from onboarding."
+                    }
+                )
+            email = (attrs.get("email") or "").strip().lower()
+            if not email:
+                raise serializers.ValidationError(
+                    {
+                        "email": "Sign in to continue — we need your account email to verify your workspace."
+                    }
+                )
+            brand = (attrs.get("brand_name") or "").strip()
+            if not brand:
+                raise serializers.ValidationError(
+                    {
+                        "brand_name": "Brand name is required. Go back to the first step and enter your company name."
+                    }
+                )
+            if len(cleaned) < 1:
+                raise serializers.ValidationError(
+                    {
+                        "prompts": "Add at least one tracking prompt before launching."
+                    }
+                )
+
+            org = Organization.objects.filter(pk=org_id).first()
+            if not org:
+                raise serializers.ValidationError(
+                    {
+                        "org_id": "Workspace not found. Complete company setup, then try again."
+                    }
+                )
+            if org.owner_email.strip().lower() != email:
+                raise serializers.ValidationError(
+                    {"org_id": "This workspace does not belong to your account."}
+                )
+
+            org_url = (org.url or "").strip()
+            if org_url:
+                req_norm = normalize_workspace_url(attrs["url"])
+                org_norm = normalize_workspace_url(org_url)
+                if req_norm != org_norm:
+                    raise serializers.ValidationError(
+                        {
+                            "url": "Website URL must match your workspace URL. Go back and correct it, or update your workspace."
+                        }
+                    )
+
+        attrs["_cleaned_prompts"] = cleaned
+        return attrs
 
 
 # ============ Gamification Serializers ============
@@ -277,6 +408,12 @@ class PromptTrackSerializer(serializers.ModelSerializer):
     ranking_label = serializers.SerializerMethodField()
     total_runs = serializers.SerializerMethodField()
     mentions = serializers.SerializerMethodField()
+    # 5-factor breakdown (computed live so they reflect the latest results)
+    factor_authority = serializers.SerializerMethodField()
+    factor_content_quality = serializers.SerializerMethodField()
+    factor_structural = serializers.SerializerMethodField()
+    factor_semantic = serializers.SerializerMethodField()
+    factor_third_party = serializers.SerializerMethodField()
 
     class Meta:
         model = PromptTrack
@@ -284,12 +421,15 @@ class PromptTrackSerializer(serializers.ModelSerializer):
             "id", "prompt_text", "is_custom", "score", "created_at", "results",
             "visibility_pct", "avg_position", "sentiment_label", "ranking_label",
             "total_runs", "mentions",
+            # 5-factor scores
+            "factor_authority", "factor_content_quality", "factor_structural",
+            "factor_semantic", "factor_third_party",
         ]
 
     def _score_data(self, obj):
         if not hasattr(obj, "_score_cache"):
             from .pipeline.prompt_tracker import compute_prompt_score
-            results = list(obj.results.values("brand_mentioned", "sentiment", "rank_position", "confidence"))
+            results = list(obj.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
             obj._score_cache = compute_prompt_score(results)
         return obj._score_cache
 
@@ -301,6 +441,21 @@ class PromptTrackSerializer(serializers.ModelSerializer):
 
     def get_sentiment_label(self, obj):
         return self._score_data(obj)["sentiment"]
+
+    def get_factor_authority(self, obj):
+        return self._score_data(obj)["authority_score"]
+
+    def get_factor_content_quality(self, obj):
+        return self._score_data(obj)["content_quality_score"]
+
+    def get_factor_structural(self, obj):
+        return self._score_data(obj)["structural_score"]
+
+    def get_factor_semantic(self, obj):
+        return self._score_data(obj)["semantic_score"]
+
+    def get_factor_third_party(self, obj):
+        return self._score_data(obj)["third_party_score"]
 
     def get_ranking_label(self, obj):
         return self._score_data(obj)["label"]

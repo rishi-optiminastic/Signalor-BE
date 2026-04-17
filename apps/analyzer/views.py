@@ -13,7 +13,14 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.subscription_utils import analysis_allowed_for_email
+from apps.accounts.subscription_utils import (
+    analysis_allowed_for_email,
+    get_plan_limits,
+    is_plan_limits_enforcement_enabled,
+    plan_limit_error_response_dict,
+    prompt_batch_would_exceed,
+    prompt_limit_reached,
+)
 from apps.integrations.models import Integration
 from apps.organizations.models import Organization
 
@@ -631,13 +638,27 @@ class StartAnalysisView(APIView):
         serializer = StartAnalysisSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        data = serializer.validated_data
+        data = dict(serializer.validated_data)
+        verify_workspace = data.pop("verify_org_workspace", False)
+        cleaned_prompts = data.pop("_cleaned_prompts", None)
+        if cleaned_prompts is None:
+            cleaned_prompts = []
+        data.pop("prompts", None)
+
         email = data.get("email", "")
         org_id = data.get("org_id")
 
         allowed, sub_err = analysis_allowed_for_email(email)
         if not allowed:
             return Response({"error": sub_err}, status=status.HTTP_403_FORBIDDEN)
+
+        # Plan cap: each completed analysis adds up to 10 prompt tracks
+        batch_exceeds, batch_msg = prompt_batch_would_exceed(email, 10)
+        if batch_exceeds:
+            return Response(
+                plan_limit_error_response_dict(batch_msg),
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Block duplicate submissions: same URL still pending/running for the same org (or user)
         submitted_url = data["url"]
@@ -689,6 +710,7 @@ class StartAnalysisView(APIView):
             email=email,
             run_type=data["run_type"],
             status=AnalysisRun.Status.PENDING,
+            onboarding_prompts=list(cleaned_prompts) if verify_workspace else [],
         )
 
         # Start background task
@@ -1726,10 +1748,33 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
 
     close_old_connections()
     try:
-        engine_results = fire_prompt_across_engines(track.prompt_text, brand_name, brand_url)
+        em = (track.analysis_run.email or "").strip()
+        allowed = (
+            get_plan_limits(em)["engines"]
+            if is_plan_limits_enforcement_enabled() and em
+            else None
+        )
+        engine_results = fire_prompt_across_engines(
+            track.prompt_text, brand_name, brand_url, allowed_engines=allowed
+        )
         for r in engine_results:
             PromptResult.objects.create(prompt_track=track, **r)
         logger.info("PromptTrack #%d: %d engine results saved", track.pk, len(engine_results))
+
+        # Compute and persist 5-factor scores
+        from .pipeline.prompt_tracker import compute_prompt_score
+        all_res = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
+        sd = compute_prompt_score(all_res)
+        track.score = sd["score"]
+        track.authority_score = sd["authority_score"]
+        track.content_quality_score = sd["content_quality_score"]
+        track.structural_score = sd["structural_score"]
+        track.semantic_score = sd["semantic_score"]
+        track.third_party_score = sd["third_party_score"]
+        track.save(update_fields=[
+            "score", "authority_score", "content_quality_score",
+            "structural_score", "semantic_score", "third_party_score",
+        ])
     except Exception as exc:
         logger.warning("PromptTrack #%d fire failed: %s", track.pk, exc)
 
@@ -1751,6 +1796,14 @@ class PromptListCreateView(APIView):
         ser = AddPromptSerializer(data=request.data)
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        email = (run.email or "").strip().lower()
+        reached, pl_msg = prompt_limit_reached(email)
+        if reached:
+            return Response(
+                plan_limit_error_response_dict(pl_msg),
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         track = PromptTrack.objects.create(
             analysis_run=run,
@@ -1832,8 +1885,14 @@ class ShareOfVoiceView(APIView):
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
         from django.db.models import Count, Q
+
         run = get_object_or_404(AnalysisRun, slug=slug)
-        engines = [e[0] for e in PromptResult.Engine.choices]
+        em = (run.email or "").strip()
+        valid_engine_keys = {e[0] for e in PromptResult.Engine.choices}
+        if is_plan_limits_enforcement_enabled() and em:
+            engines = [e for e in get_plan_limits(em)["engines"] if e in valid_engine_keys]
+        else:
+            engines = [e[0] for e in PromptResult.Engine.choices]
         data = []
         for engine in engines:
             qs = PromptResult.objects.filter(prompt_track__analysis_run=run, engine=engine)
@@ -1853,9 +1912,18 @@ class CitationTrendView(APIView):
         from django.db.models import Count, Q
         run = get_object_or_404(AnalysisRun, slug=slug)
 
+        em = (run.email or "").strip()
+        valid_engine_keys = {e[0] for e in PromptResult.Engine.choices}
+        if is_plan_limits_enforcement_enabled() and em:
+            allowed = [e for e in get_plan_limits(em)["engines"] if e in valid_engine_keys]
+        else:
+            allowed = None
+
+        base = PromptResult.objects.filter(prompt_track__analysis_run=run)
+        if allowed is not None:
+            base = base.filter(engine__in=allowed)
         qs = (
-            PromptResult.objects
-            .filter(prompt_track__analysis_run=run)
+            base
             .annotate(week_start=TruncWeek("checked_at"))
             .values("week_start", "engine")
             .annotate(
@@ -2211,6 +2279,59 @@ class AutoFixApproveView(APIView):
         return Response(result)
 
 
+class AutoFixVerifyView(APIView):
+    """POST /api/analyzer/runs/s/<slug>/auto-fix/verify/ — re-fetch the page and verify the fix heuristically."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .models import AutoFixJob
+        from .recommendation_verify import verify_recommendation_fix
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        rec_id = request.data.get("recommendation_id")
+
+        if not rec_id:
+            return Response({"error": "recommendation_id required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            rec = Recommendation.objects.get(id=rec_id, analysis_run=run)
+        except Recommendation.DoesNotExist:
+            return Response({"error": "Recommendation not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        result = verify_recommendation_fix(run, rec)
+        st = result.get("status")
+        if st == "verified":
+            job_status = AutoFixJob.Status.VERIFIED
+        elif st == "manual":
+            job_status = AutoFixJob.Status.MANUAL
+        else:
+            job_status = AutoFixJob.Status.FAILED
+        try:
+            AutoFixJob.objects.create(
+                analysis_run=run,
+                recommendation=rec,
+                integration=None,
+                fix_type=result.get("fix_type") or "verification",
+                status=job_status,
+                response_data=result,
+                error_message=""
+                if st == "verified"
+                else (result.get("message") or "")[:500],
+            )
+        except Exception:
+            logger.exception("Failed to create verify record (run=%s rec=%s)", run.id, rec.id)
+
+        return Response(
+            {
+                "recommendation_id": rec.id,
+                "status": result.get("status", "failed"),
+                "message": result.get("message", ""),
+                "fix_type": result.get("fix_type", "verification"),
+            }
+        )
+
+
 # ── AI Chat (GEO Assistant with analysis context) ────────────────────────────
 
 class AiChatView(APIView):
@@ -2328,19 +2449,30 @@ class AiChatView(APIView):
 
         context = "\n".join(context_parts)
 
+        # Detect platform from URL
+        is_shopify = ".myshopify.com" in (run.url or "")
+
         # Build system prompt
-        system_prompt = f"""You are Signalor's GEO assistant. You have the EXACT analysis data for {brand}.
+        platform_name = "Shopify" if is_shopify else "WordPress"
+        system_prompt = f"""You are Signalor's GEO (Generative Engine Optimization) assistant for {brand}.
+You help D2C brand owners improve their AI visibility — how often ChatGPT, Gemini, and Perplexity recommend their brand.
+
+The user is a {platform_name} store owner. They are NOT a developer. Give instructions using ONLY the {platform_name} admin UI — never tell them to edit code, Liquid templates, or theme files.
 
 {context}
 
-CRITICAL RULES:
-- ONLY use the EXACT scores shown above. Never guess or approximate.
-- When user asks about scores, quote the exact numbers from above.
-- Explain WHY each score is what it is using the breakdown and findings.
-- Suggest specific, practical fixes based on the recommendations listed.
-- Be concise — 2-3 short paragraphs max per response.
-- Be friendly and encouraging.
-- If you don't know something specific about the brand's products/services, say so — don't make it up."""
+RESPONSE FORMAT RULES:
+- Use **bold** for important terms and action items.
+- Use numbered steps (1. 2. 3.) for instructions.
+- Use bullet points (- ) for lists.
+- Keep each step short and specific: "Go to X → click Y → do Z".
+- Give EXACT {platform_name} Admin paths. Example: "Shopify Admin → Online Store → Pages → click on your page → edit the title"
+- Include specific examples relevant to their brand when possible.
+- If they ask "how to fix" something, give step-by-step {platform_name} instructions immediately — don't explain theory first.
+- Maximum 4-5 short paragraphs or a numbered list of 5-8 steps.
+- Be encouraging but direct. No fluff.
+- ONLY use the EXACT scores shown above. Never guess.
+- If you don't know something about their products, say so."""
 
         messages = [{"role": "system", "content": system_prompt}]
         for h in history[-8:]:
@@ -2440,6 +2572,13 @@ class ApplyGeoFixesAndReanalyzeView(APIView):
             allowed, sub_err = analysis_allowed_for_email(run.email or "")
             if not allowed:
                 return Response({"error": sub_err}, status=status.HTTP_403_FORBIDDEN)
+
+            batch_exceeds, batch_msg = prompt_batch_would_exceed(run.email or "", 10)
+            if batch_exceeds:
+                return Response(
+                    plan_limit_error_response_dict(batch_msg),
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
             new_run = AnalysisRun.objects.create(
                 organization=run.organization,
