@@ -1,17 +1,19 @@
 """Social presence detection — scrapes the brand's own website for social links,
 then attempts to fetch follower counts from the discovered profiles.
 
-Primary source: brand website footer / about page (most reliable).
-Fallback: web mention URLs and handle guesses.
+Primary source:  brand website footer / about page (most reliable).
+Fallback 1:      web mention URLs.
+Fallback 2:      Serper Google site-search to actively find the real profile.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 import requests
 
@@ -78,14 +80,19 @@ def _extract_social_links_from_website(session: requests.Session, brand_url: str
                     m = pat.search(html)
                     if m:
                         raw_url = m.group(1).strip()
-                        # Skip share/intent links
-                        if any(skip in raw_url.lower() for skip in (
+                        # URL-decode before checking so %2Fsearch, %2Flogin etc. are caught
+                        decoded = unquote(raw_url).lower()
+                        if any(skip in decoded for skip in (
                             "intent/", "sharer", "share?", "/share",
                             "hashtag/", "/explore", "/search",
+                            "/public/", "/flow/", "login", "redirect_after",
+                            "/watch?", "/watch/", "/shorts/",
                         )):
                             continue
                         normalizer = NORMALIZERS.get(platform)
-                        urls_found[platform] = normalizer(raw_url) if normalizer else raw_url
+                        normalized = normalizer(raw_url) if normalizer else raw_url
+                        if normalized:
+                            urls_found[platform] = normalized
                         break
 
             if all(v is not None for v in urls_found.values()):
@@ -128,69 +135,96 @@ def _extract_profile_urls_from_mentions(web_details: dict) -> dict[str, str | No
 
 # ── URL normalizers ──────────────────────────────────────────────────────
 
-def _normalize_instagram_url(url: str) -> str:
+def _normalize_instagram_url(url: str) -> str | None:
     try:
         p = urlparse(url if "://" in url else "https://" + url)
         path = (p.path or "").strip("/").split("/")
         if not path or not path[0]:
-            return url
+            return None
         user = path[0]
-        if user in ("p", "reel", "reels", "stories", "explore"):
-            return url
+        if user.lower() in ("p", "reel", "reels", "stories", "explore", "accounts",
+                             "direct", "tv", "web", "about", "help", "legal", "privacy"):
+            return None
         return f"https://www.instagram.com/{user}/"
     except Exception:
-        return url
+        return None
 
 
-def _normalize_facebook_url(url: str) -> str:
+def _normalize_facebook_url(url: str) -> str | None:
     try:
         p = urlparse(url if "://" in url else "https://" + url)
+        path_parts = (p.path or "").strip("/").split("/")
+        first = path_parts[0].lower() if path_parts else ""
+        # /public/ is Facebook's people-search, not a profile
+        if first in ("public", "groups", "events", "pages", "share", "sharer",
+                     "hashtag", "watch", "login", "about", "help", "business",
+                     "marketplace", "gaming", "search", "stories", "reels", "video"):
+            return None
         return f"{p.scheme}://{p.netloc}{p.path.split('?')[0]}"
     except Exception:
-        return url
+        return None
 
 
-def _normalize_youtube_url(url: str) -> str:
+def _normalize_youtube_url(url: str) -> str | None:
     try:
         p = urlparse(url if "://" in url else "https://" + url)
         path = (p.path or "").strip("/").split("/")
         if not path or not path[0]:
-            return url
+            return None
         first = path[0]
         if first.startswith("@"):
             return f"https://www.youtube.com/{first}"
         if first in ("c", "channel", "user") and len(path) > 1:
             return f"https://www.youtube.com/{first}/{path[1]}"
-        if first in ("watch", "shorts", "playlist", "feed"):
-            return url
+        # Video/content pages — not channel profiles
+        if first.lower() in ("watch", "shorts", "playlist", "feed", "results",
+                              "about", "help", "gaming", "music", "live",
+                              "trending", "subscriptions", "explore"):
+            return None
+        # URL with query string and no profile indicator → skip (e.g. watch?v=...)
+        if p.query:
+            return None
         return f"https://www.youtube.com/@{first}"
     except Exception:
-        return url
+        return None
 
 
-def _normalize_twitter_url(url: str) -> str:
+def _normalize_twitter_url(url: str) -> str | None:
     try:
         p = urlparse(url if "://" in url else "https://" + url)
         path = (p.path or "").strip("/").split("/")
         if not path or not path[0]:
-            return url
-        user = path[0]
-        if user in ("i", "search", "hashtag", "explore", "home"):
-            return url
-        return f"https://x.com/{user}"
+            return None
+        user = path[0].lower()
+        # Non-profile system paths
+        if user in ("i", "search", "hashtag", "explore", "home", "login",
+                    "settings", "notifications", "messages", "compose",
+                    "intent", "share", "about", "help", "oauth", "flow"):
+            return None
+        # /i/flow/login and similar login redirects
+        if user == "i" or (len(path) > 1 and path[1].lower() in ("flow", "login")):
+            return None
+        # Search redirects via query string
+        if "redirect_after_login" in (p.query or "").lower():
+            return None
+        return f"https://x.com/{path[0]}"
     except Exception:
-        return url
+        return None
 
 
-def _normalize_linkedin_url(url: str) -> str:
+def _normalize_linkedin_url(url: str) -> str | None:
     try:
         p = urlparse(url if "://" in url else "https://" + url)
-        return f"https://www.linkedin.com{p.path.split('?')[0].rstrip('/')}/"
+        path = p.path.strip("/")
+        # Must be a company, personal, or school profile path
+        if not any(path.startswith(prefix) for prefix in ("company/", "in/", "school/")):
+            return None
+        return f"https://www.linkedin.com/{path.split('?')[0].rstrip('/')}/"
     except Exception:
-        return url
+        return None
 
 
-NORMALIZERS = {
+NORMALIZERS: dict[str, object] = {
     "instagram": _normalize_instagram_url,
     "facebook": _normalize_facebook_url,
     "youtube": _normalize_youtube_url,
@@ -344,6 +378,84 @@ def _score_market_capture(platform_data: dict) -> float:
     return round(min(100, max(0, cap)), 1)
 
 
+# ── Serper Google site-search fallback ───────────────────────────────────
+
+# Map each platform to: (site domain, profile path prefixes that confirm it's a profile)
+_SERPER_TARGETS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("instagram",  "instagram.com",  ("instagram.com/",)),
+    ("facebook",   "facebook.com",   ("facebook.com/",)),
+    ("youtube",    "youtube.com",    ("youtube.com/@", "youtube.com/c/", "youtube.com/channel/", "youtube.com/user/")),
+    ("twitter",    "x.com",          ("x.com/", "twitter.com/")),
+    ("linkedin",   "linkedin.com",   ("linkedin.com/company/", "linkedin.com/in/")),
+]
+
+# Paths/segments that indicate a non-profile page — skip these results
+_NON_PROFILE_SEGMENTS = (
+    "/p/", "/reel", "/reels/", "/stories/", "/explore/", "/hashtag/",
+    "/search", "intent/", "sharer", "share?", "/watch?", "/shorts/",
+    "/playlist", "/posts/", "/photos/", "/videos/", "/events/",
+    "login", "signup", "register", "about/", "help/", "support/",
+)
+
+
+def _serper_find_social_profiles(brand_name: str) -> dict[str, str | None]:
+    """Use Serper Google site-search to find the brand's real social profile URLs."""
+    api_key = os.getenv("SERPER_API_KEY", "")
+    results: dict[str, str | None] = {p: None for p in PLATFORMS}
+    if not api_key:
+        return results
+
+    def _search_one(platform: str, site: str, prefixes: tuple[str, ...]) -> str | None:
+        try:
+            resp = requests.post(
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+                json={"q": f'site:{site} "{brand_name}"', "num": 5},
+                timeout=10,
+            )
+            if not resp.ok:
+                return None
+            organic = resp.json().get("organic", [])
+            brand_lower = brand_name.lower()
+            for item in organic:
+                link: str = item.get("link", "")
+                title: str = item.get("title", "").lower()
+                link_lower = link.lower()
+                # Must start with a known profile prefix
+                if not any(f"/{pref.split('/', 1)[-1]}" in link_lower or link_lower.startswith(f"https://www.{pref}") or link_lower.startswith(f"https://{pref}") for pref in prefixes):
+                    continue
+                # Must not be a non-profile page
+                if any(seg in link_lower for seg in _NON_PROFILE_SEGMENTS):
+                    continue
+                # Prefer results where the brand name appears in the page title
+                if brand_lower in title or brand_lower.split()[0] in title:
+                    normalizer = NORMALIZERS.get(platform)
+                    return normalizer(link) if normalizer else link
+            # Second pass: accept first non-skipped result without title check
+            for item in organic:
+                link = item.get("link", "")
+                link_lower = link.lower()
+                if not any(f"/{pref.split('/', 1)[-1]}" in link_lower or link_lower.startswith(f"https://www.{pref}") or link_lower.startswith(f"https://{pref}") for pref in prefixes):
+                    continue
+                if any(seg in link_lower for seg in _NON_PROFILE_SEGMENTS):
+                    continue
+                normalizer = NORMALIZERS.get(platform)
+                return normalizer(link) if normalizer else link
+        except Exception as exc:
+            logger.debug("serper social search %s/%s: %s", platform, site, exc)
+        return None
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            plat: pool.submit(_search_one, plat, site, prefixes)
+            for plat, site, prefixes in _SERPER_TARGETS
+        }
+        for plat, fut in futures.items():
+            results[plat] = fut.result()
+
+    return results
+
+
 # ── Main entry point ─────────────────────────────────────────────────────
 
 def run_social_presence(
@@ -359,7 +471,15 @@ def run_social_presence(
     # 2) Fallback: web mention URLs
     mention_urls = _extract_profile_urls_from_mentions(web_mentions_details)
 
-    # Merge: website > mentions > (no guess — only real links)
+    # 3) Fallback: Serper Google site-search (only for platforms still missing)
+    missing_after_two = [p for p in PLATFORMS if not website_urls.get(p) and not mention_urls.get(p)]
+    serper_urls: dict[str, str | None] = {p: None for p in PLATFORMS}
+    if missing_after_two:
+        serper_results = _serper_find_social_profiles(brand_name)
+        for plat in missing_after_two:
+            serper_urls[plat] = serper_results.get(plat)
+
+    # Merge: website > mentions > serper
     final_urls: dict[str, str | None] = {}
     source: dict[str, str] = {}
     for plat in PLATFORMS:
@@ -369,6 +489,9 @@ def run_social_presence(
         elif mention_urls.get(plat):
             final_urls[plat] = mention_urls[plat]
             source[plat] = "mention"
+        elif serper_urls.get(plat):
+            final_urls[plat] = serper_urls[plat]
+            source[plat] = "serper"
         else:
             final_urls[plat] = None
             source[plat] = "none"
@@ -396,15 +519,23 @@ def run_social_presence(
     market_capture = _score_market_capture(platform_data)
 
     platforms_linked = sum(1 for p in PLATFORMS if final_urls.get(p))
+    serper_found = sum(1 for p in PLATFORMS if source.get(p) == "serper")
+
+    method_parts = ["website_crawl"]
+    if any(source.get(p) == "mention" for p in PLATFORMS):
+        method_parts.append("web_mentions")
+    if serper_found:
+        method_parts.append("serper_search")
 
     return {
         **platform_data,
         "brand_presence_score": brand_presence,
         "market_capture_score": market_capture,
         "platforms_linked": platforms_linked,
-        "method": "website_crawl",
+        "method": "+".join(method_parts),
         "interpretation": (
-            f"Found social links on {platforms_linked} of {len(PLATFORMS)} platforms. "
-            "Links discovered from the brand's own website are the strongest signal."
+            f"Found social profiles on {platforms_linked} of {len(PLATFORMS)} platforms"
+            + (f" ({serper_found} via Google search" + ")" if serper_found else "")
+            + ". Links from the brand's own website are the strongest signal."
         ),
     }
