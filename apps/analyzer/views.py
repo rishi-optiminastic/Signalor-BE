@@ -1550,7 +1550,7 @@ class QuickActionView(APIView):
             "eeat": "add_author",
             "entity": "post_reddit",
             "content": "add_faq",
-            "ai_visibility": "post_medium",
+            "ai_visibility": "post_reddit",
         }
 
         action_type = action_type_map.get(recommendation.category, "add_faq")
@@ -1621,7 +1621,7 @@ class BulkCreateUserActionView(APIView):
             "eeat": "add_author",
             "entity": "post_reddit",
             "content": "add_faq",
-            "ai_visibility": "post_medium",
+            "ai_visibility": "post_reddit",
         }
 
         created_actions = []
@@ -1670,7 +1670,7 @@ class BulkCreateUserActionView(APIView):
                     action_type = "add_robots"
                 elif "author" in title.lower() or "e-e-a-t" in title.lower():
                     action_type = "add_author"
-                elif "reddit" in title.lower() or "medium" in title.lower():
+                elif "reddit" in title.lower():
                     action_type = "post_reddit"
             
             points = priority_points.get(priority, 10)
@@ -1745,6 +1745,7 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
     """Background worker: fires prompt across engines and saves PromptResult rows."""
     from django.db import close_old_connections
     from .pipeline.prompt_tracker import fire_prompt_across_engines
+    from .pipeline.citations import persist_prompt_result, host_of, competitor_hosts_for_run
 
     close_old_connections()
     try:
@@ -1757,8 +1758,10 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
         engine_results = fire_prompt_across_engines(
             track.prompt_text, brand_name, brand_url, allowed_engines=allowed
         )
+        brand_host = host_of(brand_url)
+        rival_hosts = competitor_hosts_for_run(track.analysis_run)
         for r in engine_results:
-            PromptResult.objects.create(prompt_track=track, **r)
+            persist_prompt_result(track, r, brand_host, rival_hosts)
         logger.info("PromptTrack #%d: %d engine results saved", track.pk, len(engine_results))
 
         # Compute and persist 5-factor scores
@@ -1785,7 +1788,12 @@ class PromptListCreateView(APIView):
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
         run = get_object_or_404(AnalysisRun, slug=slug)
-        tracks = run.prompt_tracks.prefetch_related("results").order_by("-score", "-created_at")
+        tracks = (
+            run.prompt_tracks
+               .filter(deleted_at__isnull=True)
+               .prefetch_related("results")
+               .order_by("-score", "-created_at")
+        )
         serializer = PromptTrackSerializer(tracks, many=True)
         return Response(serializer.data)
 
@@ -1831,7 +1839,9 @@ class RecheckPromptView(APIView):
         from django.shortcuts import get_object_or_404
         import threading
         run = get_object_or_404(AnalysisRun, slug=slug)
-        track = get_object_or_404(PromptTrack, pk=track_id, analysis_run=run)
+        track = get_object_or_404(
+            PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True
+        )
 
         brand_name = run.brand_name or run.url
         brand_url = run.url
@@ -1846,6 +1856,28 @@ class RecheckPromptView(APIView):
         return Response({"status": "rechecking"}, status=status.HTTP_202_ACCEPTED)
 
 
+class PromptDeleteView(APIView):
+    """DELETE /runs/s/<slug>/prompts/<track_id>/ — soft-delete a tracked prompt.
+
+    The row is retained (flagged with `deleted_at`) so the user's historical
+    count still applies toward their plan's `max_prompts`. This prevents
+    deleting-and-re-adding to bypass plan limits. Usage/billing endpoints
+    also count soft-deleted rows.
+    """
+    permission_classes = [AllowAny]
+
+    def delete(self, request, slug, track_id):
+        from django.shortcuts import get_object_or_404
+        from django.utils import timezone
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        track = get_object_or_404(
+            PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True
+        )
+        track.deleted_at = timezone.now()
+        track.save(update_fields=["deleted_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class RecheckAllPromptsView(APIView):
     """POST /runs/s/<slug>/recheck-all/ — re-fire every prompt for this run."""
     permission_classes = [AllowAny]
@@ -1854,7 +1886,7 @@ class RecheckAllPromptsView(APIView):
         from django.shortcuts import get_object_or_404
         import threading
         run = get_object_or_404(AnalysisRun, slug=slug)
-        tracks = list(run.prompt_tracks.all())
+        tracks = list(run.prompt_tracks.filter(deleted_at__isnull=True))
 
         if not tracks:
             return Response({"status": "no_tracks", "count": 0})
@@ -1943,6 +1975,96 @@ class CitationTrendView(APIView):
                 "rate_pct": round((mentioned / total * 100), 1) if total > 0 else 0.0,
             })
         return Response(CitationTrendPointSerializer(data, many=True).data)
+
+
+class CitationSourcesView(APIView):
+    """GET /runs/s/<slug>/citations/ — citation source roll-up per run.
+
+    Returns `domains` (top-cited hosts with brand/rival flags), plus convenience
+    buckets `your_pages` and `rival_pages` ranked by mention frequency, so the
+    frontend can render "pages AI loves" without a second query.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from django.db.models import Count
+        from collections import defaultdict
+        from .models import PromptCitation
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+
+        qs = PromptCitation.objects.filter(
+            prompt_result__prompt_track__analysis_run=run,
+            prompt_result__prompt_track__deleted_at__isnull=True,
+        ).exclude(domain="")
+
+        # Domain roll-up
+        domain_rows = (
+            qs.values("domain")
+            .annotate(total=Count("id"))
+            .order_by("-total")[:40]
+        )
+        # Pull flags for each domain (is_brand / is_competitor) separately so
+        # we don't double-count or collapse mixed values.
+        flag_map: dict[str, dict] = {}
+        for c in qs.values("domain", "is_brand", "is_competitor"):
+            f = flag_map.setdefault(c["domain"], {"is_brand": False, "is_competitor": False})
+            if c["is_brand"]:
+                f["is_brand"] = True
+            if c["is_competitor"]:
+                f["is_competitor"] = True
+
+        # Per-engine breakdown for top domains
+        engine_rows = (
+            qs.filter(domain__in=[r["domain"] for r in domain_rows])
+            .values("domain", "prompt_result__engine")
+            .annotate(total=Count("id"))
+        )
+        by_engine: dict[str, dict] = defaultdict(dict)
+        for r in engine_rows:
+            by_engine[r["domain"]][r["prompt_result__engine"]] = r["total"]
+
+        # Sample URL for each top domain
+        sample_map: dict[str, str] = {}
+        for c in qs.filter(domain__in=[r["domain"] for r in domain_rows]).values("domain", "url", "title")[:500]:
+            sample_map.setdefault(c["domain"], c["url"])
+
+        domains = []
+        for row in domain_rows:
+            d = row["domain"]
+            flags = flag_map.get(d, {"is_brand": False, "is_competitor": False})
+            domains.append({
+                "domain": d,
+                "total": row["total"],
+                "is_brand": flags["is_brand"],
+                "is_competitor": flags["is_competitor"],
+                "by_engine": by_engine.get(d, {}),
+                "sample_url": sample_map.get(d, ""),
+            })
+
+        # Your top-cited pages
+        your_pages = (
+            qs.filter(is_brand=True)
+            .values("url", "title")
+            .annotate(mentions=Count("id"))
+            .order_by("-mentions")[:10]
+        )
+        rival_pages = (
+            qs.filter(is_competitor=True)
+            .values("url", "title", "domain")
+            .annotate(mentions=Count("id"))
+            .order_by("-mentions")[:10]
+        )
+
+        return Response({
+            "total_citations": qs.count(),
+            "brand_citations": qs.filter(is_brand=True).count(),
+            "competitor_citations": qs.filter(is_competitor=True).count(),
+            "domains": domains,
+            "your_pages": list(your_pages),
+            "rival_pages": list(rival_pages),
+        })
 
 
 class CompetitorListCreateView(APIView):
@@ -2600,3 +2722,125 @@ class ApplyGeoFixesAndReanalyzeView(APIView):
                 "next_run": next_run_payload,
             }
         )
+
+
+# ============================================================================
+# Sitemap audit
+# ============================================================================
+
+class SitemapAuditStartView(APIView):
+    """POST /runs/s/<slug>/sitemap/  — kick off an async sitemap audit."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        import threading
+        from django.shortcuts import get_object_or_404
+        from .models import SitemapAudit
+        from .pipeline.sitemap_audit import run_sitemap_audit, HARD_URL_CAP
+        from .serializers import SitemapAuditSerializer
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        audit = SitemapAudit.objects.create(
+            analysis_run=run,
+            status=SitemapAudit.Status.QUEUED,
+            crawl_limit=HARD_URL_CAP,
+        )
+
+        def _do(aid):
+            try:
+                close_old_connections()
+                run_sitemap_audit(aid)
+            except Exception:
+                logger.exception("run_sitemap_audit thread failed")
+
+        threading.Thread(target=_do, args=(audit.id,), daemon=True).start()
+
+        return Response(
+            SitemapAuditSerializer(audit).data,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class SitemapAuditDetailView(APIView):
+    """GET /runs/s/<slug>/sitemap/  — latest audit summary + paginated pages."""
+    permission_classes = [AllowAny]
+
+    ALLOWED_SORTS = {
+        "url": "url",
+        "-url": "-url",
+        "status": "status_code",
+        "-status": "-status_code",
+        "ai_score": "ai_score",
+        "-ai_score": "-ai_score",
+        "words": "word_count",
+        "-words": "-word_count",
+        "lcp": "lcp_ms",
+        "-lcp": "-lcp_ms",
+        "fcp": "fcp_ms",
+        "-fcp": "-fcp_ms",
+        "ttfb": "ttfb_ms",
+        "-ttfb": "-ttfb_ms",
+    }
+
+    def get(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .models import SitemapAudit
+        from .serializers import SitemapAuditSerializer, SitemapAuditPageSerializer
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        audit = (
+            SitemapAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
+        )
+        if audit is None:
+            return Response({"audit": None, "pages": [], "total": 0})
+
+        qs = audit.pages.all()
+        state = request.GET.get("state")
+        if state:
+            qs = qs.filter(state=state)
+        severity = request.GET.get("severity")
+        if severity:
+            qs = qs.filter(severity=severity)
+        q = (request.GET.get("q") or "").strip()
+        if q:
+            qs = qs.filter(url__icontains=q)
+
+        sort = request.GET.get("sort", "-ai_score")
+        qs = qs.order_by(self.ALLOWED_SORTS.get(sort, "-ai_score"), "id")
+
+        total = qs.count()
+        try:
+            page_size = min(max(int(request.GET.get("page_size", 50)), 1), 200)
+            page = max(int(request.GET.get("page", 1)), 1)
+        except ValueError:
+            page_size, page = 50, 1
+        start_idx = (page - 1) * page_size
+        rows = list(qs[start_idx:start_idx + page_size])
+
+        return Response({
+            "audit": SitemapAuditSerializer(audit).data,
+            "pages": SitemapAuditPageSerializer(rows, many=True).data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        })
+
+
+class AgentLogView(APIView):
+    """GET /runs/s/<slug>/agent-log/  — stub; returns empty entries + integration slots."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .models import AgentLogEntry
+        from .serializers import AgentLogEntrySerializer
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        entries = AgentLogEntry.objects.filter(analysis_run=run).order_by("-ts")[:100]
+        return Response({
+            "entries": AgentLogEntrySerializer(entries, many=True).data,
+            "integrations": [
+                {"name": "Cloudflare Logpush", "key": "cloudflare", "connected": False, "status": "coming_soon"},
+                {"name": "Vercel Edge Logs", "key": "vercel", "connected": False, "status": "coming_soon"},
+            ],
+        })

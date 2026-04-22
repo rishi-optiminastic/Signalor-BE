@@ -90,6 +90,7 @@ def _save_probes_and_tracks(
     from apps.accounts.subscription_utils import get_plan_limits, is_plan_limits_enforcement_enabled
 
     from .pipeline.prompt_tracker import generate_brand_prompts, fire_prompt_across_engines, compute_prompt_score
+    from .pipeline.citations import persist_prompt_result, host_of, competitor_hosts_for_run
 
     # Save visibility probes
     for probe in probes_data:
@@ -131,6 +132,8 @@ def _save_probes_and_tracks(
         brand_prompts = brand_prompts[:gen_count]
 
     # Fire each AI-generated prompt and save results
+    brand_host = host_of(brand_url)
+    rival_hosts = competitor_hosts_for_run(run)
     for prompt_text in brand_prompts:
         try:
             track = PromptTrack.objects.create(
@@ -142,7 +145,7 @@ def _save_probes_and_tracks(
                 prompt_text, brand_name, brand_url, runs=1, allowed_engines=allowed_engines
             )
             for r in engine_results:
-                PromptResult.objects.create(prompt_track=track, **r)
+                persist_prompt_result(track, r, brand_host, rival_hosts)
 
             # Compute and save score + 5-factor breakdown
             all_results = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
