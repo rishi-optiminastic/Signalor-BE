@@ -1109,3 +1109,80 @@ class AgentLogEntry(models.Model):
 
     def __str__(self):
         return f"AgentLogEntry<{self.bot_name} {self.path}>"
+
+
+class SchemaWatch(models.Model):
+    """A run of the Schema Watchtower — validates JSON-LD on a set of URLs
+    (products, articles, FAQs) for breakage and drift. v1 is a static
+    validator; v2 will diff against a stored baseline for drift detection."""
+
+    class Status(models.TextChoices):
+        QUEUED = "queued"
+        RUNNING = "running"
+        COMPLETE = "complete"
+        FAILED = "failed"
+
+    analysis_run = models.ForeignKey(
+        AnalysisRun, on_delete=models.CASCADE, related_name="schema_watches"
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.QUEUED, db_index=True
+    )
+    progress = models.IntegerField(default=0)
+
+    total_urls = models.IntegerField(default=0)
+    healthy_count = models.IntegerField(default=0)
+    warn_count = models.IntegerField(default=0)
+    broken_count = models.IntegerField(default=0)
+
+    discovered_from_sitemap = models.BooleanField(default=True)
+
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    error_message = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"SchemaWatch<{self.analysis_run_id} {self.status} {self.progress}%>"
+
+
+class SchemaWatchPage(models.Model):
+    """One URL snapshot inside a SchemaWatch run."""
+
+    class Severity(models.TextChoices):
+        OK = "ok"
+        WARN = "warn"
+        FAIL = "fail"
+
+    watch = models.ForeignKey(
+        SchemaWatch, on_delete=models.CASCADE, related_name="pages"
+    )
+    url = models.URLField(max_length=2048)
+    path = models.CharField(max_length=2048, blank=True, default="")
+    page_kind = models.CharField(max_length=32, blank=True, default="")
+    status_code = models.IntegerField(default=0)
+
+    schema_types = models.JSONField(default=list, blank=True)
+    jsonld_count = models.IntegerField(default=0)
+    raw_jsonld = models.JSONField(default=list, blank=True)
+
+    severity = models.CharField(
+        max_length=8, choices=Severity.choices, default=Severity.OK, db_index=True
+    )
+    issues = models.JSONField(default=list, blank=True)
+    fix_targets = models.JSONField(default=list, blank=True)
+
+    error_message = models.CharField(max_length=512, blank=True, default="")
+    checked_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["watch_id", "id"]
+        indexes = [
+            models.Index(fields=["watch", "severity"]),
+        ]
+
+    def __str__(self):
+        return f"SchemaWatchPage<{self.url} {self.severity}>"

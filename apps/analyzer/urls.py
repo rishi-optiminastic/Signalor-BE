@@ -49,6 +49,9 @@ from .views import (
     SitemapAuditStartView,
     SitemapAuditDetailView,
     AgentLogView,
+    # Schema watchtower
+    SchemaWatchStartView,
+    SchemaWatchDetailView,
 )
 
 app_name = "analyzer"
@@ -81,6 +84,9 @@ urlpatterns = [
     path("runs/s/<str:slug>/sitemap/", SitemapAuditDetailView.as_view(), name="sitemap-audit-detail"),
     path("runs/s/<str:slug>/sitemap/start/", SitemapAuditStartView.as_view(), name="sitemap-audit-start"),
     path("runs/s/<str:slug>/agent-log/", AgentLogView.as_view(), name="agent-log"),
+    # Schema watchtower
+    path("runs/s/<str:slug>/schema-watch/", SchemaWatchDetailView.as_view(), name="schema-watch-detail"),
+    path("runs/s/<str:slug>/schema-watch/start/", SchemaWatchStartView.as_view(), name="schema-watch-start"),
     path("runs/s/<str:slug>/", AnalysisRunBySlugView.as_view(), name="run-by-slug"),
     path("runs/<int:run_id>/status/", AnalysisRunStatusView.as_view(), name="run-status"),
     path("runs/<int:run_id>/export-pdf/", ExportPDFView.as_view(), name="export-pdf"),

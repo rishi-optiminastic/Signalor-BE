@@ -18,6 +18,8 @@ from .models import (
     SitemapAudit,
     SitemapAuditPage,
     AgentLogEntry,
+    SchemaWatch,
+    SchemaWatchPage,
     ACHIEVEMENTS_INFO,
     ACTION_TEMPLATES,
 )
@@ -593,3 +595,27 @@ class AgentLogEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = AgentLogEntry
         fields = ["id", "bot_name", "path", "status_code", "ts", "source"]
+
+
+class SchemaWatchPageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SchemaWatchPage
+        fields = [
+            "id", "url", "path", "page_kind",
+            "status_code",
+            "schema_types", "jsonld_count", "raw_jsonld",
+            "severity", "issues", "fix_targets",
+            "error_message", "checked_at",
+        ]
+
+
+class SchemaWatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SchemaWatch
+        fields = [
+            "id", "status", "progress",
+            "total_urls", "healthy_count", "warn_count", "broken_count",
+            "discovered_from_sitemap",
+            "started_at", "finished_at", "created_at",
+            "error_message",
+        ]

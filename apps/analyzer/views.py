@@ -2845,3 +2845,89 @@ class AgentLogView(APIView):
                 {"name": "Vercel Edge Logs", "key": "vercel", "connected": False, "status": "coming_soon"},
             ],
         })
+
+
+# ============================================================================
+# Schema Watchtower
+# ============================================================================
+
+class SchemaWatchStartView(APIView):
+    """POST /runs/s/<slug>/schema-watch/  — kick off a schema validation run."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        import threading
+        from django.shortcuts import get_object_or_404
+        from .models import SchemaWatch
+        from .pipeline.schema_watch import run_schema_watch
+        from .serializers import SchemaWatchSerializer
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        watch = SchemaWatch.objects.create(
+            analysis_run=run,
+            status=SchemaWatch.Status.QUEUED,
+        )
+
+        def _do(wid):
+            try:
+                close_old_connections()
+                run_schema_watch(wid)
+            except Exception:
+                logger.exception("run_schema_watch thread failed")
+
+        threading.Thread(target=_do, args=(watch.id,), daemon=True).start()
+
+        return Response(
+            SchemaWatchSerializer(watch).data,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class SchemaWatchDetailView(APIView):
+    """GET /runs/s/<slug>/schema-watch/  — latest watch summary + pages."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .models import SchemaWatch
+        from .serializers import SchemaWatchSerializer, SchemaWatchPageSerializer
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        watch = (
+            SchemaWatch.objects.filter(analysis_run=run).order_by("-created_at").first()
+        )
+        if watch is None:
+            return Response({"watch": None, "pages": [], "total": 0})
+
+        qs = watch.pages.all()
+        severity = request.GET.get("severity")
+        if severity:
+            qs = qs.filter(severity=severity)
+        kind = request.GET.get("kind")
+        if kind:
+            qs = qs.filter(page_kind=kind)
+        q = (request.GET.get("q") or "").strip()
+        if q:
+            qs = qs.filter(url__icontains=q)
+
+        # Sort fail first, then warn, then ok; within each, by URL
+        qs = qs.extra(
+            select={"_sev_rank": "CASE severity WHEN 'fail' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END"},
+        ).order_by("_sev_rank", "url")
+
+        total = qs.count()
+        try:
+            page_size = min(max(int(request.GET.get("page_size", 100)), 1), 200)
+            page = max(int(request.GET.get("page", 1)), 1)
+        except ValueError:
+            page_size, page = 100, 1
+        start_idx = (page - 1) * page_size
+        rows = list(qs[start_idx:start_idx + page_size])
+
+        return Response({
+            "watch": SchemaWatchSerializer(watch).data,
+            "pages": SchemaWatchPageSerializer(rows, many=True).data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        })
