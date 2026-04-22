@@ -99,6 +99,7 @@ def _search_bing(query: str, brand_name: str, brand_url: str) -> dict:
     mentioned = False
     rank_position = 0
     response_parts = []
+    citations: list[dict] = []
 
     # Entity knowledge panel
     for entity in entities[:2]:
@@ -124,6 +125,14 @@ def _search_bing(query: str, brand_name: str, brand_url: str) -> dict:
         else:
             response_parts.append(f"[#{i}] {result.get('name', '')}")
 
+        if result.get("url"):
+            citations.append({
+                "url": result["url"],
+                "title": result.get("name", "") or "",
+                "snippet": result.get("snippet", "") or "",
+                "position": i,
+            })
+
     sentiment = "neutral"
     if mentioned:
         combined = " ".join(response_parts).lower()
@@ -143,6 +152,7 @@ def _search_bing(query: str, brand_name: str, brand_url: str) -> dict:
         "sentiment": sentiment,
         "confidence": 1.0 if mentioned else 0.0,
         "rank_position": rank_position,
+        "citations": citations,
     }
 
 
@@ -187,6 +197,7 @@ def _search_google_serper(query: str, brand_name: str, brand_url: str) -> dict:
     mentioned = False
     rank_position = 0
     response_parts = []
+    citations: list[dict] = []
 
     # Check answer box
     ab_text = (answer_box.get("snippet", "") or answer_box.get("answer", "")).lower()
@@ -219,6 +230,14 @@ def _search_google_serper(query: str, brand_name: str, brand_url: str) -> dict:
         else:
             response_parts.append(f"[#{i}] {result.get('title', '')}")
 
+        if result.get("link"):
+            citations.append({
+                "url": result["link"],
+                "title": result.get("title", "") or "",
+                "snippet": result.get("snippet", "") or "",
+                "position": i,
+            })
+
     # Determine sentiment from snippets
     sentiment = "neutral"
     if mentioned:
@@ -239,6 +258,7 @@ def _search_google_serper(query: str, brand_name: str, brand_url: str) -> dict:
         "sentiment": sentiment,
         "confidence": 1.0 if mentioned else 0.0,
         "rank_position": rank_position,
+        "citations": citations,
     }
 
 
@@ -377,7 +397,7 @@ def fire_prompt_across_engines(
     allowed_engines: PLAN_LIMITS["engines"] list; None = all configured.
     Returns list of dicts: engine, response_text, brand_mentioned, sentiment, confidence, rank_position
     """
-    from .llm import ask_multiple_llms
+    from .llm import ask_multiple_llms_with_citations
     from .ai_visibility import _build_brand_aliases, _match_brand, _analyze_mention_quality, _check_ranking_position
 
     provider_keys, include_google, include_bing = _providers_and_search_from_plan_engines(allowed_engines)
@@ -386,10 +406,10 @@ def fire_prompt_across_engines(
     all_results = []
 
     for run_idx in range(runs):
-        responses: dict[str, str] = {}
+        responses: dict[str, dict] = {}
         if provider_keys:
             try:
-                responses = ask_multiple_llms(
+                responses = ask_multiple_llms_with_citations(
                     prompt_text,
                     providers=provider_keys,
                     purpose=f"Prompt Track (run {run_idx + 1}/{runs})",
@@ -399,8 +419,10 @@ def fire_prompt_across_engines(
                 logger.warning("fire_prompt run %d failed: %s", run_idx + 1, exc)
                 continue
 
-        for provider_key, response_text in responses.items():
+        for provider_key, payload in responses.items():
             engine = _ENGINE_MAP.get(provider_key, provider_key)
+            response_text = (payload or {}).get("text", "") if isinstance(payload, dict) else ""
+            provider_citations = (payload or {}).get("citations", []) if isinstance(payload, dict) else []
 
             if not response_text:
                 all_results.append({
@@ -410,6 +432,7 @@ def fire_prompt_across_engines(
                     "sentiment": "neutral",
                     "confidence": 0.0,
                     "rank_position": 0,
+                    "citations": provider_citations,
                 })
                 continue
 
@@ -430,6 +453,7 @@ def fire_prompt_across_engines(
                 "sentiment": sentiment,
                 "confidence": round(confidence, 3),
                 "rank_position": rank_position,
+                "citations": provider_citations,
             })
 
     # Search engines run once per prompt (not per run) for authoritative signals
@@ -603,8 +627,8 @@ def recheck_track(track, brand_name: str, brand_url: str) -> int:
     Returns the number of new PromptResult rows created.
     """
     from django.db import close_old_connections
-    from apps.analyzer.models import PromptResult
     from apps.accounts.subscription_utils import get_plan_limits, is_plan_limits_enforcement_enabled
+    from .citations import persist_prompt_result, host_of, competitor_hosts_for_run
 
     close_old_connections()
     email = (track.analysis_run.email or "").strip()
@@ -616,9 +640,11 @@ def recheck_track(track, brand_name: str, brand_url: str) -> int:
     engine_results = fire_prompt_across_engines(
         track.prompt_text, brand_name, brand_url, allowed_engines=allowed
     )
+    brand_host = host_of(brand_url)
+    rival_hosts = competitor_hosts_for_run(track.analysis_run)
     created = 0
     for r in engine_results:
-        PromptResult.objects.create(prompt_track=track, **r)
+        persist_prompt_result(track, r, brand_host, rival_hosts)
         created += 1
 
     # Compute and save score from ALL results (not just this run)
