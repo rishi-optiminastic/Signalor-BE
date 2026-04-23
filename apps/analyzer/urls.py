@@ -31,6 +31,7 @@ from .views import (
     PromptResultDetailView,
     ShareOfVoiceView,
     CitationTrendView,
+    CitationSourcesView,
     RecheckPromptView,
     RecheckAllPromptsView,
     PromptDeleteView,
@@ -45,6 +46,13 @@ from .views import (
     AiChatView,
     GeoImprovementsView,
     ApplyGeoFixesAndReanalyzeView,
+    # Sitemap audit
+    SitemapAuditStartView,
+    SitemapAuditDetailView,
+    AgentLogView,
+    # Schema watchtower
+    SchemaWatchStartView,
+    SchemaWatchDetailView,
 )
 
 app_name = "analyzer"
@@ -68,6 +76,7 @@ urlpatterns = [
     path("runs/s/<str:slug>/recheck-all/",                     RecheckAllPromptsView.as_view(),  name="prompt-recheck-all"),
     path("runs/s/<str:slug>/share-of-voice/",                  ShareOfVoiceView.as_view(),       name="share-of-voice"),
     path("runs/s/<str:slug>/citation-trend/",                  CitationTrendView.as_view(),      name="citation-trend"),
+    path("runs/s/<str:slug>/citations/",                       CitationSourcesView.as_view(),    name="citation-sources"),
     path("runs/s/<str:slug>/geo-improvements/", GeoImprovementsView.as_view(), name="geo-improvements"),
     path("runs/s/<str:slug>/apply-geo-fixes/", ApplyGeoFixesAndReanalyzeView.as_view(), name="apply-geo-fixes"),
     path("runs/s/<str:slug>/competitors/", CompetitorListCreateView.as_view(), name="competitor-list-create"),
@@ -77,6 +86,13 @@ urlpatterns = [
     path("runs/s/<str:slug>/auto-fix/approve/", AutoFixApproveView.as_view(), name="auto-fix-approve"),
     path("runs/s/<str:slug>/auto-fix/verify/", AutoFixVerifyView.as_view(), name="auto-fix-verify"),
     path("runs/s/<str:slug>/chat/", AiChatView.as_view(), name="ai-chat"),
+    # Sitemap audit + AI agent log stub
+    path("runs/s/<str:slug>/sitemap/", SitemapAuditDetailView.as_view(), name="sitemap-audit-detail"),
+    path("runs/s/<str:slug>/sitemap/start/", SitemapAuditStartView.as_view(), name="sitemap-audit-start"),
+    path("runs/s/<str:slug>/agent-log/", AgentLogView.as_view(), name="agent-log"),
+    # Schema watchtower
+    path("runs/s/<str:slug>/schema-watch/", SchemaWatchDetailView.as_view(), name="schema-watch-detail"),
+    path("runs/s/<str:slug>/schema-watch/start/", SchemaWatchStartView.as_view(), name="schema-watch-start"),
     path("runs/s/<str:slug>/", AnalysisRunBySlugView.as_view(), name="run-by-slug"),
     path("runs/<int:run_id>/status/", AnalysisRunStatusView.as_view(), name="run-status"),
     path("runs/<int:run_id>/export-pdf/", ExportPDFView.as_view(), name="export-pdf"),
