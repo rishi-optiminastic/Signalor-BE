@@ -876,6 +876,11 @@ def recheck_track(track, brand_name: str, brand_url: str) -> int:
         "structural_score", "semantic_score", "third_party_score",
     ])
 
+    # Drop cached run-level aggregates so the dashboard reflects new results
+    # on the next page load instead of waiting for the 5-10 min TTL to expire.
+    from apps.analyzer._cache import invalidate_run_aggregates
+    invalidate_run_aggregates(track.analysis_run.slug)
+
     logger.info(
         "recheck_track #%d ('%s'): %d new results, score=%.3f (%s)",
         track.pk, track.prompt_text[:60], created, score_data["score"], score_data["label"],
