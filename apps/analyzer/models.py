@@ -735,6 +735,85 @@ class PromptCitation(models.Model):
         return f"Citation {self.domain} (brand={self.is_brand}, rival={self.is_competitor})"
 
 
+class BacklinkSnapshot(models.Model):
+    """
+    Cached domain-level backlink metrics fetched from DataForSEO.
+
+    Reused across runs/prompts; refreshed when older than 7 days. Keyed by
+    bare domain (no scheme, no path, no www. prefix) lowercased.
+    """
+    domain = models.CharField(max_length=255, unique=True, db_index=True)
+    referring_domains = models.IntegerField(default=0)
+    backlinks = models.IntegerField(default=0)
+    rank = models.IntegerField(default=0)
+    fetched_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-referring_domains"]
+
+    def __str__(self):
+        return f"BacklinkSnapshot {self.domain} (RD={self.referring_domains})"
+
+
+class BacklinkOpportunity(models.Model):
+    """
+    A site where the user can submit/list/earn a backlink — generated per prompt
+    by the LLM based on the prompt's intent + the brand's profile.
+
+    Drives the per-prompt "Backlink Opportunities" actions panel: each row is
+    something the user can act on (submit a listing, request a review, post in
+    a community, claim a profile).
+    """
+    class Category(models.TextChoices):
+        DIRECTORY = "directory", "Directory"
+        REVIEW = "review", "Review Site"
+        PRESS = "press", "Press / Media"
+        FORUM = "forum", "Community / Forum"
+        RESOURCE = "resource", "Resource Page"
+        OTHER = "other", "Other"
+
+    class Status(models.TextChoices):
+        SUGGESTED = "suggested", "Suggested"
+        SUBMITTED = "submitted", "Submitted"
+        LIVE = "live", "Live"
+        DISMISSED = "dismissed", "Dismissed"
+
+    prompt_track = models.ForeignKey(
+        PromptTrack,
+        on_delete=models.CASCADE,
+        related_name="backlink_opportunities",
+    )
+    name = models.CharField(max_length=200)
+    description = models.CharField(max_length=400, blank=True, default="")
+    rationale = models.CharField(max_length=400, blank=True, default="")
+    submit_url = models.URLField(max_length=2048)
+    category = models.CharField(
+        max_length=20,
+        choices=Category.choices,
+        default=Category.DIRECTORY,
+    )
+    # Lower number = higher priority. 1=high, 2=medium, 3=low.
+    priority = models.IntegerField(default=2)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.SUGGESTED,
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    live_url = models.URLField(max_length=2048, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["priority", "name"]
+        indexes = [
+            models.Index(fields=["prompt_track", "status"]),
+        ]
+
+    def __str__(self):
+        return f"BacklinkOpportunity {self.name} ({self.status})"
+
+
 class BlogAutomationConfig(models.Model):
     class PublishMode(models.TextChoices):
         AUTO_PUBLISH = "auto_publish", "Auto Publish"

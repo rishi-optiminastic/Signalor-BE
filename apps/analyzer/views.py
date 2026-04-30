@@ -762,6 +762,9 @@ class AnalysisRunListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Heavy JSONFields (llm_logs, onboarding_prompts) aren't in the list
+        # serializer — defer them so we don't ship hundreds of KB per row.
+        runs = runs.defer("llm_logs", "onboarding_prompts").order_by("-created_at")
         serializer = AnalysisRunListSerializer(runs, many=True)
         return Response(serializer.data)
 
@@ -771,8 +774,32 @@ class AnalysisRunDetailView(APIView):
     throttle_classes = []  # frequently loaded by analyzer pages
 
     def get(self, request, run_id):
+        from django.db.models import Prefetch
         try:
-            run = AnalysisRun.objects.get(pk=run_id)
+            # Pre-load every related collection the serializer touches so the
+            # response is one batch of queries instead of five sequential
+            # cross-region round trips. brand_visibility is a OneToOne —
+            # select_related. Reverse-FKs use prefetch_related.
+            #
+            # RecommendationSerializer.get_can_auto_fix() reads obj.analysis_run.url,
+            # so we chain a select_related to avoid one query per recommendation.
+            # We also defer llm_logs (~128 KB JSONField) on that join.
+            recs_qs = (
+                Recommendation.objects
+                .select_related("analysis_run")
+                .defer("analysis_run__llm_logs", "analysis_run__onboarding_prompts")
+            )
+            run = (
+                AnalysisRun.objects
+                .select_related("brand_visibility", "organization")
+                .prefetch_related(
+                    "page_scores",
+                    "competitors",
+                    Prefetch("recommendations", queryset=recs_qs),
+                    "ai_probes",
+                )
+                .get(pk=run_id)
+            )
         except AnalysisRun.DoesNotExist:
             return Response(
                 {"error": "Analysis run not found."},
@@ -1808,6 +1835,8 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
             "score", "authority_score", "content_quality_score",
             "structural_score", "semantic_score", "third_party_score",
         ])
+        from ._cache import invalidate_run_aggregates
+        invalidate_run_aggregates(track.analysis_run.slug)
     except Exception as exc:
         logger.warning("PromptTrack #%d fire failed: %s", track.pk, exc)
 
@@ -1822,7 +1851,10 @@ class PromptListCreateView(APIView):
             run.prompt_tracks
                .filter(deleted_at__isnull=True)
                .select_related("analysis_run")
-               .prefetch_related("results")
+               # AnalysisRun.llm_logs / onboarding_prompts are large JSONField
+               # blobs we don't need here — defer them to keep the join cheap.
+               .defer("analysis_run__llm_logs", "analysis_run__onboarding_prompts")
+               .prefetch_related("results", "results__citations")
                .order_by("-score", "-created_at")
         )
         serializer = PromptTrackSerializer(tracks, many=True)
@@ -1910,6 +1942,99 @@ class RecheckPromptView(APIView):
         return Response({"status": "rechecking"}, status=status.HTTP_202_ACCEPTED)
 
 
+class PromptBacklinksView(APIView):
+    """GET /runs/s/<slug>/prompts/<track_id>/backlinks/ — Citation Authority panel.
+
+    Thin HTTP layer — delegates all work to ``BacklinkAuthorityService``.
+    Translates ``ProviderNotConfigured`` into a structured 503 the frontend
+    can recognize and surface as "Backlink provider not configured".
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug, track_id):
+        from django.shortcuts import get_object_or_404
+        from .services.backlink_authority import (
+            BacklinkAuthorityService,
+            ProviderNotConfigured,
+        )
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        track = get_object_or_404(
+            PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True,
+        )
+
+        try:
+            payload = BacklinkAuthorityService(track=track).build()
+        except ProviderNotConfigured as exc:
+            return Response(
+                {"detail": str(exc), "code": "dataforseo_not_configured"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(payload)
+
+
+class PromptOpportunitiesView(APIView):
+    """GET / POST /runs/s/<slug>/prompts/<track_id>/opportunities/
+
+    Thin HTTP layer — delegates to ``OpportunityService`` for all logic.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug, track_id):
+        service = _opportunity_service(slug, track_id)
+        return Response(service.list())
+
+    def post(self, request, slug, track_id):
+        service = _opportunity_service(slug, track_id)
+        from .services.opportunities import OpportunityServiceError
+        try:
+            return Response(service.regenerate())
+        except OpportunityServiceError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+
+class PromptOpportunityDetailView(APIView):
+    """PATCH / DELETE /runs/s/<slug>/prompts/<track_id>/opportunities/<opp_id>/"""
+    permission_classes = [AllowAny]
+
+    def patch(self, request, slug, track_id, opp_id):
+        service = _opportunity_service(slug, track_id)
+        from .services.opportunities import OpportunityServiceError
+        try:
+            payload = service.update_status(
+                opp_id,
+                new_status=request.data.get("status"),
+                live_url=request.data.get("live_url"),
+            )
+        except OpportunityServiceError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(payload)
+
+    def delete(self, request, slug, track_id, opp_id):
+        service = _opportunity_service(slug, track_id)
+        from .services.opportunities import OpportunityServiceError
+        try:
+            service.delete(opp_id)
+        except OpportunityServiceError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def _opportunity_service(slug: str, track_id: int):
+    """Resolve the run+track and return an OpportunityService bound to it."""
+    from django.shortcuts import get_object_or_404
+    from .services.opportunities import OpportunityService
+
+    run = get_object_or_404(AnalysisRun, slug=slug)
+    track = get_object_or_404(
+        PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True,
+    )
+    return OpportunityService(track=track)
+
+
 class PromptDeleteView(APIView):
     """DELETE /runs/s/<slug>/prompts/<track_id>/ — soft-delete a tracked prompt.
 
@@ -1929,6 +2054,8 @@ class PromptDeleteView(APIView):
         )
         track.deleted_at = timezone.now()
         track.save(update_fields=["deleted_at"])
+        from ._cache import invalidate_run_aggregates
+        invalidate_run_aggregates(slug)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -1971,21 +2098,33 @@ class ShareOfVoiceView(APIView):
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
         from django.db.models import Count, Q
+        from ._cache import cached_or_compute
 
         run = get_object_or_404(AnalysisRun, slug=slug)
-        em = (run.email or "").strip()
-        valid_engine_keys = {e[0] for e in PromptResult.Engine.choices}
-        if is_plan_limits_enforcement_enabled() and em:
-            engines = [e for e in get_plan_limits(em)["engines"] if e in valid_engine_keys]
-        else:
-            engines = [e[0] for e in PromptResult.Engine.choices]
-        data = []
-        for engine in engines:
-            qs = PromptResult.objects.filter(prompt_track__analysis_run=run, engine=engine)
-            total = qs.count()
-            mentioned = qs.filter(brand_mentioned=True).count()
-            sov_pct = round((mentioned / total * 100), 1) if total > 0 else 0.0
-            data.append({"engine": engine, "total": total, "mentioned": mentioned, "sov_pct": sov_pct})
+
+        def _compute():
+            em = (run.email or "").strip()
+            valid_engine_keys = {e[0] for e in PromptResult.Engine.choices}
+            if is_plan_limits_enforcement_enabled() and em:
+                engines = [e for e in get_plan_limits(em)["engines"] if e in valid_engine_keys]
+            else:
+                engines = [e[0] for e in PromptResult.Engine.choices]
+            # One aggregation query per engine -> engines * 2 round trips. Cached
+            # for 10 min so the dashboard's first paint amortizes the work.
+            data = []
+            for engine in engines:
+                qs = PromptResult.objects.filter(prompt_track__analysis_run=run, engine=engine)
+                agg = qs.aggregate(
+                    total=Count("id"),
+                    mentioned=Count("id", filter=Q(brand_mentioned=True)),
+                )
+                total = agg["total"] or 0
+                mentioned = agg["mentioned"] or 0
+                sov_pct = round((mentioned / total * 100), 1) if total > 0 else 0.0
+                data.append({"engine": engine, "total": total, "mentioned": mentioned, "sov_pct": sov_pct})
+            return data
+
+        data = cached_or_compute(f"sov:{slug}", 600, _compute)
         return Response(ShareOfVoiceSerializer(data, many=True).data)
 
 
@@ -1996,38 +2135,45 @@ class CitationTrendView(APIView):
         from django.shortcuts import get_object_or_404
         from django.db.models.functions import TruncWeek
         from django.db.models import Count, Q
+        from ._cache import cached_or_compute
         run = get_object_or_404(AnalysisRun, slug=slug)
 
-        em = (run.email or "").strip()
-        valid_engine_keys = {e[0] for e in PromptResult.Engine.choices}
-        if is_plan_limits_enforcement_enabled() and em:
-            allowed = [e for e in get_plan_limits(em)["engines"] if e in valid_engine_keys]
-        else:
-            allowed = None
+        def _compute():
+            em = (run.email or "").strip()
+            valid_engine_keys = {e[0] for e in PromptResult.Engine.choices}
+            if is_plan_limits_enforcement_enabled() and em:
+                allowed = [e for e in get_plan_limits(em)["engines"] if e in valid_engine_keys]
+            else:
+                allowed = None
 
-        base = PromptResult.objects.filter(prompt_track__analysis_run=run)
-        if allowed is not None:
-            base = base.filter(engine__in=allowed)
-        qs = (
-            base
-            .annotate(week_start=TruncWeek("checked_at"))
-            .values("week_start", "engine")
-            .annotate(
-                total=Count("id"),
-                mentioned=Count("id", filter=Q(brand_mentioned=True)),
+            base = PromptResult.objects.filter(prompt_track__analysis_run=run)
+            if allowed is not None:
+                base = base.filter(engine__in=allowed)
+            qs = (
+                base
+                .annotate(week_start=TruncWeek("checked_at"))
+                .values("week_start", "engine")
+                .annotate(
+                    total=Count("id"),
+                    mentioned=Count("id", filter=Q(brand_mentioned=True)),
+                )
+                .order_by("week_start", "engine")
             )
-            .order_by("week_start", "engine")
-        )
 
-        data = []
-        for row in qs:
-            total = row["total"]
-            mentioned = row["mentioned"]
-            data.append({
-                "week_start": row["week_start"].date() if row["week_start"] else None,
-                "engine": row["engine"],
-                "rate_pct": round((mentioned / total * 100), 1) if total > 0 else 0.0,
-            })
+            data = []
+            for row in qs:
+                total = row["total"]
+                mentioned = row["mentioned"]
+                data.append({
+                    # Stored as ISO string so Redis serialization round-trips
+                    # cleanly (date objects don't pickle through JSON cache).
+                    "week_start": row["week_start"].date().isoformat() if row["week_start"] else None,
+                    "engine": row["engine"],
+                    "rate_pct": round((mentioned / total * 100), 1) if total > 0 else 0.0,
+                })
+            return data
+
+        data = cached_or_compute(f"trend:{slug}", 300, _compute)
         return Response(CitationTrendPointSerializer(data, many=True).data)
 
 
@@ -2042,83 +2188,137 @@ class CitationSourcesView(APIView):
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
-        from django.db.models import Count
+        from django.db.models import Count, Q
         from collections import defaultdict
         from .models import PromptCitation
+        from ._cache import cached_or_compute
 
         run = get_object_or_404(AnalysisRun, slug=slug)
 
-        qs = PromptCitation.objects.filter(
-            prompt_result__prompt_track__analysis_run=run,
-            prompt_result__prompt_track__deleted_at__isnull=True,
-        ).exclude(domain="")
+        def _compute():
+            qs = PromptCitation.objects.filter(
+                prompt_result__prompt_track__analysis_run=run,
+                prompt_result__prompt_track__deleted_at__isnull=True,
+            ).exclude(domain="")
 
-        # Domain roll-up
-        domain_rows = (
-            qs.values("domain")
-            .annotate(total=Count("id"))
-            .order_by("-total")[:40]
-        )
-        # Pull flags for each domain (is_brand / is_competitor) separately so
-        # we don't double-count or collapse mixed values.
-        flag_map: dict[str, dict] = {}
-        for c in qs.values("domain", "is_brand", "is_competitor"):
-            f = flag_map.setdefault(c["domain"], {"is_brand": False, "is_competitor": False})
-            if c["is_brand"]:
-                f["is_brand"] = True
-            if c["is_competitor"]:
-                f["is_competitor"] = True
+            # One aggregate for the three count totals — was 3 round trips.
+            counts = qs.aggregate(
+                total=Count("id"),
+                brand=Count("id", filter=Q(is_brand=True)),
+                rival=Count("id", filter=Q(is_competitor=True)),
+            )
 
-        # Per-engine breakdown for top domains
-        engine_rows = (
-            qs.filter(domain__in=[r["domain"] for r in domain_rows])
-            .values("domain", "prompt_result__engine")
-            .annotate(total=Count("id"))
-        )
-        by_engine: dict[str, dict] = defaultdict(dict)
-        for r in engine_rows:
-            by_engine[r["domain"]][r["prompt_result__engine"]] = r["total"]
+            # Domain roll-up
+            domain_rows = list(
+                qs.values("domain")
+                .annotate(total=Count("id"))
+                .order_by("-total")[:40]
+            )
+            top_domains = [r["domain"] for r in domain_rows]
 
-        # Sample URL for each top domain
-        sample_map: dict[str, str] = {}
-        for c in qs.filter(domain__in=[r["domain"] for r in domain_rows]).values("domain", "url", "title")[:500]:
-            sample_map.setdefault(c["domain"], c["url"])
+            # Flags per domain (is_brand / is_competitor) — restricted to the
+            # top-N we'll actually return so we don't iterate all citations.
+            flag_map: dict[str, dict] = {}
+            if top_domains:
+                for c in qs.filter(domain__in=top_domains).values("domain", "is_brand", "is_competitor"):
+                    f = flag_map.setdefault(c["domain"], {"is_brand": False, "is_competitor": False})
+                    if c["is_brand"]:
+                        f["is_brand"] = True
+                    if c["is_competitor"]:
+                        f["is_competitor"] = True
 
-        domains = []
-        for row in domain_rows:
-            d = row["domain"]
-            flags = flag_map.get(d, {"is_brand": False, "is_competitor": False})
-            domains.append({
-                "domain": d,
-                "total": row["total"],
-                "is_brand": flags["is_brand"],
-                "is_competitor": flags["is_competitor"],
-                "by_engine": by_engine.get(d, {}),
-                "sample_url": sample_map.get(d, ""),
-            })
+            # Per-engine breakdown for top domains
+            by_engine: dict[str, dict] = defaultdict(dict)
+            if top_domains:
+                engine_rows = (
+                    qs.filter(domain__in=top_domains)
+                    .values("domain", "prompt_result__engine")
+                    .annotate(total=Count("id"))
+                )
+                for r in engine_rows:
+                    by_engine[r["domain"]][r["prompt_result__engine"]] = r["total"]
 
-        # Your top-cited pages
-        your_pages = (
-            qs.filter(is_brand=True)
-            .values("url", "title")
-            .annotate(mentions=Count("id"))
-            .order_by("-mentions")[:10]
-        )
-        rival_pages = (
-            qs.filter(is_competitor=True)
-            .values("url", "title", "domain")
-            .annotate(mentions=Count("id"))
-            .order_by("-mentions")[:10]
-        )
+            # Sample URL for each top domain
+            sample_map: dict[str, str] = {}
+            if top_domains:
+                for c in qs.filter(domain__in=top_domains).values("domain", "url")[:500]:
+                    sample_map.setdefault(c["domain"], c["url"])
 
-        return Response({
-            "total_citations": qs.count(),
-            "brand_citations": qs.filter(is_brand=True).count(),
-            "competitor_citations": qs.filter(is_competitor=True).count(),
-            "domains": domains,
-            "your_pages": list(your_pages),
-            "rival_pages": list(rival_pages),
-        })
+            domains = []
+            for row in domain_rows:
+                d = row["domain"]
+                flags = flag_map.get(d, {"is_brand": False, "is_competitor": False})
+                domains.append({
+                    "domain": d,
+                    "total": row["total"],
+                    "is_brand": flags["is_brand"],
+                    "is_competitor": flags["is_competitor"],
+                    "by_engine": dict(by_engine.get(d, {})),
+                    "sample_url": sample_map.get(d, ""),
+                })
+
+            your_pages = list(
+                qs.filter(is_brand=True)
+                .values("url", "title")
+                .annotate(mentions=Count("id"))
+                .order_by("-mentions")[:10]
+            )
+            rival_pages = list(
+                qs.filter(is_competitor=True)
+                .values("url", "title", "domain")
+                .annotate(mentions=Count("id"))
+                .order_by("-mentions")[:10]
+            )
+
+            return {
+                "total_citations": counts["total"] or 0,
+                "brand_citations": counts["brand"] or 0,
+                "competitor_citations": counts["rival"] or 0,
+                "domains": domains,
+                "your_pages": your_pages,
+                "rival_pages": rival_pages,
+            }
+
+        return Response(cached_or_compute(f"cite:{slug}", 600, _compute))
+
+
+class BrandKitView(APIView):
+    """GET/POST /api/analyzer/runs/s/<slug>/brand-kit/
+
+    GET:  return the cached submission kit; auto-generate on first call.
+    POST: force a fresh regeneration (drops cache, re-runs the LLM).
+
+    The kit is the user's "click-to-copy" payload for filling out directory
+    and review-site submission forms. It's a thin wrapper around
+    ``services.brand_kit.get_or_generate``.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .services.brand_kit import get_or_generate, BrandKitError
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        try:
+            return Response({"kit": get_or_generate(run)})
+        except BrandKitError as exc:
+            return Response(
+                {"detail": str(exc), "code": "kit_generation_failed"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+    def post(self, request, slug):
+        from django.shortcuts import get_object_or_404
+        from .services.brand_kit import get_or_generate, BrandKitError
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        try:
+            return Response({"kit": get_or_generate(run, force=True)})
+        except BrandKitError as exc:
+            return Response(
+                {"detail": str(exc), "code": "kit_generation_failed"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
 
 class CompetitorListCreateView(APIView):
@@ -2820,14 +3020,15 @@ class SitemapAuditStartView(APIView):
             crawl_limit=HARD_URL_CAP,
         )
 
-        def _do(aid):
-            try:
-                close_old_connections()
-                run_sitemap_audit(aid)
-            except Exception:
-                logger.exception("run_sitemap_audit thread failed")
-
-        threading.Thread(target=_do, args=(audit.id,), daemon=True).start()
+        from ._thread_safety import run_in_background_with_status
+        run_in_background_with_status(
+            model_cls=SitemapAudit,
+            instance_id=audit.id,
+            status_field="status",
+            failure_value=SitemapAudit.Status.FAILED,
+            work=lambda: run_sitemap_audit(audit.id),
+            log_label="run_sitemap_audit",
+        )
 
         return Response(
             SitemapAuditSerializer(audit).data,
@@ -2941,14 +3142,15 @@ class SchemaWatchStartView(APIView):
             status=SchemaWatch.Status.QUEUED,
         )
 
-        def _do(wid):
-            try:
-                close_old_connections()
-                run_schema_watch(wid)
-            except Exception:
-                logger.exception("run_schema_watch thread failed")
-
-        threading.Thread(target=_do, args=(watch.id,), daemon=True).start()
+        from ._thread_safety import run_in_background_with_status
+        run_in_background_with_status(
+            model_cls=SchemaWatch,
+            instance_id=watch.id,
+            status_field="status",
+            failure_value=SchemaWatch.Status.FAILED,
+            work=lambda: run_schema_watch(watch.id),
+            log_label="run_schema_watch",
+        )
 
         return Response(
             SchemaWatchSerializer(watch).data,
@@ -3036,14 +3238,15 @@ class RankAuditStartView(APIView):
             status=RankAudit.Status.QUEUED,
         )
 
-        def _do(aid):
-            try:
-                close_old_connections()
-                run_rank_audit(aid)
-            except Exception:
-                logger.exception("run_rank_audit thread failed")
-
-        threading.Thread(target=_do, args=(audit.id,), daemon=True).start()
+        from ._thread_safety import run_in_background_with_status
+        run_in_background_with_status(
+            model_cls=RankAudit,
+            instance_id=audit.id,
+            status_field="status",
+            failure_value=RankAudit.Status.FAILED,
+            work=lambda: run_rank_audit(audit.id),
+            log_label="run_rank_audit",
+        )
 
         return Response(
             RankAuditSerializer(audit).data,
@@ -3176,15 +3379,20 @@ class RankAuditRefreshQueryView(APIView):
             competitor_names = []
         gl = (_derive_geo(run).get("gl") or "")
 
-        def _do(qid):
-            close_old_connections()
-            try:
-                from .models import RankQuery as _RQ
-                q = _RQ.objects.get(pk=qid)
-                audit_query(q, brand_names, competitor_names, brand_domain=brand_domain, gl=gl)
-            except Exception:
-                logger.exception("refresh rank query thread failed")
+        from ._thread_safety import run_in_background_with_status
+        from .models import RankQuery as _RQ
 
-        threading.Thread(target=_do, args=(query.id,), daemon=True).start()
+        def _refresh():
+            q = _RQ.objects.get(pk=query.id)
+            audit_query(q, brand_names, competitor_names, brand_domain=brand_domain, gl=gl)
+
+        run_in_background_with_status(
+            model_cls=_RQ,
+            instance_id=query.id,
+            status_field="status",
+            failure_value=_RQ.Status.FAILED,
+            work=_refresh,
+            log_label="refresh_rank_query",
+        )
 
         return Response(RankQuerySerializer(query).data, status=status.HTTP_202_ACCEPTED)
