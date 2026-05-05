@@ -38,6 +38,7 @@ from .views import (
     PromptOpportunitiesView,
     PromptOpportunityDetailView,
     BrandKitView,
+    DomainAnalyticsView,
     PromptDeleteView,
     GeneratePromptsView,
     # New features
@@ -61,6 +62,22 @@ from .views import (
     RankAuditStartView,
     RankAuditDetailView,
     RankAuditRefreshQueryView,
+    PromptRankView,
+    # Backlink marketplace
+    BacklinkCatalogView,
+    BacklinkOrderListCreateView,
+    BacklinkOrderDetailView,
+    BacklinkOrderConfirmPaymentView,
+    # Wikipedia draft generator
+    PromptWikipediaDraftView,
+    # Schema / E-E-A-T generators
+    PromptSchemaView,
+    # Content optimisation (Cursor-style edit + save)
+    ContentPagesView,
+    ContentPageFieldsView,
+    ContentSuggestionsView,
+    ContentSuggestionDismissView,
+    ContentSaveView,
 )
 
 app_name = "analyzer"
@@ -97,6 +114,7 @@ urlpatterns = [
     path("runs/s/<str:slug>/citation-trend/",                  CitationTrendView.as_view(),      name="citation-trend"),
     path("runs/s/<str:slug>/citations/",                       CitationSourcesView.as_view(),    name="citation-sources"),
     path("runs/s/<str:slug>/brand-kit/",                       BrandKitView.as_view(),           name="brand-kit"),
+    path("runs/s/<str:slug>/domain-analytics/",                DomainAnalyticsView.as_view(),    name="domain-analytics"),
     path("runs/s/<str:slug>/geo-improvements/", GeoImprovementsView.as_view(), name="geo-improvements"),
     path("runs/s/<str:slug>/apply-geo-fixes/", ApplyGeoFixesAndReanalyzeView.as_view(), name="apply-geo-fixes"),
     path("runs/s/<str:slug>/competitors/", CompetitorListCreateView.as_view(), name="competitor-list-create"),
@@ -117,6 +135,20 @@ urlpatterns = [
     path("runs/s/<str:slug>/rank/", RankAuditDetailView.as_view(), name="rank-audit-detail"),
     path("runs/s/<str:slug>/rank/start/", RankAuditStartView.as_view(), name="rank-audit-start"),
     path("runs/s/<str:slug>/rank/query/<int:query_id>/refresh/", RankAuditRefreshQueryView.as_view(), name="rank-audit-refresh-query"),
+    path("runs/s/<str:slug>/prompts/<int:track_id>/rank/", PromptRankView.as_view(), name="prompt-rank"),
+    # Backlink marketplace
+    path("runs/s/<str:slug>/backlinks/catalog/", BacklinkCatalogView.as_view(), name="backlink-catalog"),
+    path("runs/s/<str:slug>/backlinks/orders/", BacklinkOrderListCreateView.as_view(), name="backlink-orders"),
+    path("runs/s/<str:slug>/backlinks/orders/<int:order_id>/", BacklinkOrderDetailView.as_view(), name="backlink-order-detail"),
+    path("runs/s/<str:slug>/backlinks/orders/<int:order_id>/confirm-payment/", BacklinkOrderConfirmPaymentView.as_view(), name="backlink-order-confirm-payment"),
+    path("runs/s/<str:slug>/prompts/<int:track_id>/wikipedia/draft/", PromptWikipediaDraftView.as_view(), name="prompt-wikipedia-draft"),
+    path("runs/s/<str:slug>/prompts/<int:track_id>/schema/", PromptSchemaView.as_view(), name="prompt-schema"),
+    # Content optimisation
+    path("runs/s/<str:slug>/content/pages/", ContentPagesView.as_view(), name="content-pages"),
+    path("runs/s/<str:slug>/content/page/", ContentPageFieldsView.as_view(), name="content-page-fields"),
+    path("runs/s/<str:slug>/content/suggestions/", ContentSuggestionsView.as_view(), name="content-suggestions"),
+    path("runs/s/<str:slug>/content/suggestions/<int:suggestion_id>/dismiss/", ContentSuggestionDismissView.as_view(), name="content-suggestion-dismiss"),
+    path("runs/s/<str:slug>/content/save/", ContentSaveView.as_view(), name="content-save"),
     path("runs/s/<str:slug>/", AnalysisRunBySlugView.as_view(), name="run-by-slug"),
     path("runs/<int:run_id>/status/", AnalysisRunStatusView.as_view(), name="run-status"),
     path("runs/<int:run_id>/export-pdf/", ExportPDFView.as_view(), name="export-pdf"),
