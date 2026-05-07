@@ -361,6 +361,13 @@ class DodoWebhookView(APIView):
         self._store_latest_payment_id(data, sub)
         logger.info("Subscription activated for %s (plan=%s)", email, sub.plan)
 
+        # Referral hook: if this email was referred, stage the referrer's reward.
+        try:
+            from apps.referrals.services import on_referee_first_payment
+            on_referee_first_payment(email, referrer_subscription_id=sub.payment_subscription_id)
+        except Exception:
+            logger.exception("referrals: on_referee_first_payment failed for %s", email)
+
     def _handle_subscription_renewed(self, data):
         """Subscription renewed for next period."""
         sub = self._find_subscription(data)
@@ -379,6 +386,14 @@ class DodoWebhookView(APIView):
         sub.save(update_fields=["status", "current_period_end"])
         self._store_latest_payment_id(data, sub)
         logger.info("Subscription renewed for %s", sub.email)
+
+        # Referral hook: a renewal landed for this email — mark any pending
+        # referrer reward as APPLIED (one-cycle discount has now been used).
+        try:
+            from apps.referrals.services import on_referrer_renewal
+            on_referrer_renewal(sub.email)
+        except Exception:
+            logger.exception("referrals: on_referrer_renewal failed for %s", sub.email)
 
     def _handle_subscription_on_hold(self, data):
         """Renewal payment failed — subscription on hold."""
@@ -409,6 +424,14 @@ class DodoWebhookView(APIView):
         sub.status = "canceled"
         sub.save(update_fields=["status"])
         logger.info("Subscription cancelled for %s", sub.email)
+
+        # Referral hook: revoke the referrer's pending reward if their referee
+        # cancelled before the renewal fired (no churn protection).
+        try:
+            from apps.referrals.services import on_referee_cancelled
+            on_referee_cancelled(sub.email)
+        except Exception:
+            logger.exception("referrals: on_referee_cancelled failed for %s", sub.email)
 
     def _handle_payment_succeeded(self, data):
         """One-time payment succeeded — activate if linked to subscription."""
