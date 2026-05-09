@@ -1261,6 +1261,7 @@ class WordPressConnectView(APIView):
         email = (payload.get("email", "") or "").lower().strip()
         site_url = (payload.get("site_url", "") or "").strip()
         api_key = (payload.get("api_key", "") or "").strip()
+        username = (payload.get("username", "") or "").strip()
 
         if not email or not site_url:
             return Response({"error": "email and site_url are required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1273,53 +1274,86 @@ class WordPressConnectView(APIView):
         if not allowed:
             return Response({"error": sub_err}, status=status.HTTP_403_FORBIDDEN)
 
-        # ── Plugin connect (self-hosted WordPress with Signalor plugin) ──
+        # ── Self-hosted WordPress ──
         if api_key:
-            # Verify the plugin is reachable
-            verify_url = f"{site_url.rstrip('/')}/wp-json/signalor/v1/status"
-            try:
-                resp = requests.get(
-                    verify_url,
-                    headers={"X-Signalor-Key": api_key},
-                    timeout=10,
+            if username:
+                # Standard WP REST API path using Application Password
+                from .services.wordpress import validate_wordpress_connection
+
+                try:
+                    site_info = validate_wordpress_connection(site_url, username, api_key)
+                except ValueError as exc:
+                    return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+                integration, _ = Integration.objects.update_or_create(
+                    organization=org,
+                    provider=Integration.Provider.WORDPRESS,
+                    defaults={"is_active": True},
                 )
-                if not resp.ok:
+                # Store raw app_password — _fetch_selfhosted_data reads it via get_access_token()
+                integration.set_access_token(api_key)
+                integration.metadata = {
+                    "site_url": site_info["site_url"],
+                    "site_name": site_info["site_name"],
+                    "username": username,
+                    "connection_type": "app_password",
+                }
+                integration.save()
+                _deactivate_other_store_integration(org, Integration.Provider.WORDPRESS)
+
+                if org.url != site_info["site_url"]:
+                    org.url = site_info["site_url"]
+                    org.save(update_fields=["url"])
+
+                return Response({
+                    "status": "connected",
+                    "site_name": site_info["site_name"],
+                    "message": f"Connected to {site_info['site_name']} via Application Password.",
+                })
+            else:
+                # Legacy: Signalor plugin path (no username provided)
+                verify_url = f"{site_url.rstrip('/')}/wp-json/signalor/v1/status"
+                try:
+                    resp = requests.get(
+                        verify_url,
+                        headers={"X-Signalor-Key": api_key},
+                        timeout=10,
+                    )
+                    if not resp.ok:
+                        return Response(
+                            {"error": f"Could not connect to plugin (HTTP {resp.status_code}). Check your site URL and API key."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    plugin_data = resp.json()
+                except requests.RequestException as exc:
                     return Response(
-                        {"error": f"Could not connect to plugin (HTTP {resp.status_code}). Check your site URL and API key."},
+                        {"error": f"Could not reach your site: {exc}. Make sure the Signalor GEO plugin is installed and active."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                plugin_data = resp.json()
-            except requests.RequestException as exc:
-                return Response(
-                    {"error": f"Could not reach your site: {exc}. Make sure the Signalor GEO plugin is installed and active."},
-                    status=status.HTTP_400_BAD_REQUEST,
+
+                integration, _ = Integration.objects.update_or_create(
+                    organization=org,
+                    provider=Integration.Provider.WORDPRESS,
+                    defaults={"is_active": True},
                 )
+                integration.metadata = {
+                    "site_url": site_url.rstrip("/"),
+                    "site_name": plugin_data.get("name", ""),
+                    "signalor_api_key": api_key,
+                    "connection_type": "plugin",
+                }
+                integration.save()
+                _deactivate_other_store_integration(org, Integration.Provider.WORDPRESS)
 
-            # Create/update integration
-            integration, _ = Integration.objects.update_or_create(
-                organization=org,
-                provider=Integration.Provider.WORDPRESS,
-                defaults={"is_active": True},
-            )
-            integration.metadata = {
-                "site_url": site_url.rstrip("/"),
-                "site_name": plugin_data.get("name", ""),
-                "signalor_api_key": api_key,
-                "connection_type": "plugin",
-            }
-            integration.save()
-            _deactivate_other_store_integration(org, Integration.Provider.WORDPRESS)
+                if org.url != site_url:
+                    org.url = site_url
+                    org.save(update_fields=["url"])
 
-            # Sync org URL
-            if org.url != site_url:
-                org.url = site_url
-                org.save(update_fields=["url"])
-
-            return Response({
-                "status": "connected",
-                "site_name": plugin_data.get("name", ""),
-                "message": f"Connected to {plugin_data.get('name', site_url)} via Signalor plugin.",
-            })
+                return Response({
+                    "status": "connected",
+                    "site_name": plugin_data.get("name", ""),
+                    "message": f"Connected to {plugin_data.get('name', site_url)} via Signalor plugin.",
+                })
 
         # ── WordPress.com OAuth flow ──
         client_id = os.getenv("WPCOM_CLIENT_ID", "").strip()
