@@ -1052,6 +1052,112 @@ class ShopifyCallbackView(APIView):
         return _shopify_redirect(True, return_to=return_to)
 
 
+class ShopifyBillingUpdateView(APIView):
+    """POST /api/integrations/shopify/billing-update/
+
+    Receives merchant subscription state changes from the Signalor Shopify
+    app (which subscribes to Shopify's `app_subscriptions/update` webhook).
+    Updates the merchant's Signalor-side Subscription record so feature
+    access stays in sync with their Shopify-billed plan.
+
+    Auth: shared secret in the `X-Signalor-Webhook-Secret` header. Set
+    `SHOPIFY_APP_WEBHOOK_SECRET` on both this backend and the Shopify app's
+    deploy env to the same value.
+
+    Body (JSON):
+      {"shop": "example.myshopify.com", "plan": "Pro", "status": "ACTIVE"}
+
+    plan      Starter | Pro | Max
+    status    ACTIVE | PENDING | ACCEPTED | DECLINED | EXPIRED | FROZEN | CANCELLED
+    """
+    permission_classes = [AllowAny]
+
+    # Shopify plan id (sent by the Shopify app) → Signalor Subscription.Plan value
+    PLAN_MAP = {
+        "Starter": "starter",
+        "Pro": "pro",
+        "Max": "business",
+    }
+
+    # Shopify subscription state → Signalor Subscription.Status value
+    STATUS_MAP = {
+        "ACTIVE": "active",
+        "ACCEPTED": "active",
+        "PENDING": "unpaid",
+        "DECLINED": "unpaid",
+        "EXPIRED": "unpaid",
+        "FROZEN": "past_due",
+        "CANCELLED": "canceled",
+    }
+
+    def post(self, request):
+        from apps.accounts.models import Subscription
+        from .services.shopify import normalize_shop_domain
+
+        expected_secret = os.getenv("SHOPIFY_APP_WEBHOOK_SECRET", "").strip()
+        provided_secret = request.headers.get("X-Signalor-Webhook-Secret", "").strip()
+        if not expected_secret or not hmac.compare_digest(expected_secret, provided_secret):
+            return Response({"error": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        shop_raw = (request.data.get("shop") or "").strip()
+        plan_raw = (request.data.get("plan") or "").strip()
+        status_raw = (request.data.get("status") or "").strip().upper()
+
+        if not shop_raw or not status_raw:
+            return Response(
+                {"error": "shop and status are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        signalor_status = self.STATUS_MAP.get(status_raw, "unpaid")
+        signalor_plan = self.PLAN_MAP.get(plan_raw) if plan_raw else None
+
+        # Find the Signalor account by matching the connected Shopify integration.
+        shop_domain = normalize_shop_domain(shop_raw)
+        integration = Integration.objects.filter(
+            provider=Integration.Provider.SHOPIFY,
+            metadata__shop_domain=shop_domain,
+        ).select_related("organization").first()
+
+        if not integration:
+            # The merchant approved billing on Shopify but hasn't connected the
+            # Shopify integration to a Signalor workspace yet. We can't resolve
+            # them to an email. ACK so Shopify doesn't retry — the next time the
+            # merchant connects/syncs, the entitlement will be reconciled.
+            logger.warning(
+                "shopify-billing-update: no integration for shop=%s status=%s plan=%s",
+                shop_domain, status_raw, plan_raw,
+            )
+            return Response({"ok": True, "matched": False})
+
+        owner_email = (integration.organization.owner_email or "").lower().strip()
+        if not owner_email:
+            logger.error(
+                "shopify-billing-update: integration org has no owner_email shop=%s org=%s",
+                shop_domain, integration.organization_id,
+            )
+            return Response({"ok": True, "matched": False})
+
+        sub, created = Subscription.objects.get_or_create(email=owner_email)
+
+        sub.status = signalor_status
+        if signalor_plan:
+            sub.plan = signalor_plan
+        # Tag the source so future Dodo webhooks don't fight Shopify-side state.
+        # `payment_subscription_id` is normally Dodo's; we prefix to disambiguate.
+        sub.payment_customer_id = f"shopify:{shop_domain}"
+        sub.currency = "usd"  # Shopify billing config is USD; can be widened later
+        sub.save(update_fields=[
+            "plan", "status", "payment_customer_id", "currency", "updated_at",
+        ])
+
+        logger.info(
+            "shopify-billing-update: shop=%s email=%s plan=%s status=%s (was_new=%s)",
+            shop_domain, owner_email, sub.plan, sub.status, created,
+        )
+        return Response({"ok": True, "email": owner_email, "plan": sub.plan, "status": sub.status})
+
+
 class ShopifyAppUninstalledWebhookView(APIView):
     """POST /api/integrations/shopify/webhooks/app-uninstalled/"""
     permission_classes = [AllowAny]

@@ -95,6 +95,8 @@ services:
         sync: false
       - key: SHOPIFY_REDIRECT_URI
         value: https://api.signalor.ai/api/integrations/shopify/callback
+      - key: SHOPIFY_APP_WEBHOOK_SECRET
+        sync: false
       - key: EMAIL_HOST
         sync: false
       - key: EMAIL_PORT
