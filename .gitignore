@@ -7,6 +7,11 @@ __pycache__/
 .Python
 venv/
 .venv/
+env/
+ENV/
+local.env
+producation.env
+staging.env
 
 # Django
 # db.sqlite3
