@@ -1,0 +1,39 @@
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = [
+  "migrations",
+  "venv",
+  ".venv",
+  "env",
+  "static",
+  "staticfiles",
+  "media",
+  "logs",
+]
+
+[tool.ruff.lint]
+# Keep this list short and pragmatic. We're optimizing for catching real
+# bugs and rough edges, not enforcing a strict style.
+select = [
+  "E",    # pycodestyle errors
+  "F",    # pyflakes (unused imports, undefined names, etc.)
+  "I",    # isort (import ordering)
+  "B",    # flake8-bugbear (likely bugs)
+  "UP",   # pyupgrade (modernize syntax)
+]
+ignore = [
+  "E501",  # line too long — ruff-format handles wrapping where it can
+  "B008",  # function call in default arg (common in DRF / Django views)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Settings files re-export and use star imports; tests do too.
+"config/settings/*.py" = ["F401", "F403", "F405"]
+"**/tests/**/*.py" = ["F401", "F841"]
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

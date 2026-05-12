@@ -1,0 +1,9 @@
+# Dev-only tools. Install in your venv:
+#   pip install -r requirements-dev.txt
+#   pre-commit install
+#
+# These are NOT shipped to production — Render uses requirements.txt only.
+
+-r requirements.txt
+ruff==0.15.12
+pre-commit==4.6.0
