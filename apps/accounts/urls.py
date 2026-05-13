@@ -1,16 +1,17 @@
 from django.urls import path
 
 from .views import (
+    CancelTerminationView,
     CreateCheckoutSessionView,
-    SubscriptionStatusView,
-    UsageView,
-    DownloadInvoiceView,
+    DeleteAccountView,
     DodoWebhookView,
+    DownloadInvoiceView,
+    InvoiceListView,
     PlanListView,
     PlanPricesView,
+    SubscriptionStatusView,
     TerminateAccountView,
-    CancelTerminationView,
-    DeleteAccountView,
+    UsageView,
 )
 
 app_name = "accounts"
@@ -22,6 +23,7 @@ urlpatterns = [
     path("payments/status/", SubscriptionStatusView.as_view(), name="subscription-status"),
     path("payments/usage/", UsageView.as_view(), name="usage"),
     path("payments/invoice/", DownloadInvoiceView.as_view(), name="download-invoice"),
+    path("payments/invoices/", InvoiceListView.as_view(), name="invoice-list"),
     path("payments/webhook/", DodoWebhookView.as_view(), name="dodo-webhook"),
     path("account/terminate/", TerminateAccountView.as_view(), name="terminate-account"),
     path("account/cancel-termination/", CancelTerminationView.as_view(), name="cancel-termination"),
