@@ -12,11 +12,7 @@ logger = logging.getLogger("apps")
 
 
 def dodo_api_base() -> str:
-    return (
-        "https://live.dodopayments.com"
-        if dodo_live_mode_enabled()
-        else "https://test.dodopayments.com"
-    )
+    return "https://live.dodopayments.com" if dodo_live_mode_enabled() else "https://test.dodopayments.com"
 
 
 def _scan_payment_id_dict(data: dict) -> str:
@@ -85,3 +81,49 @@ def fetch_payment_invoice_pdf(payment_id: str) -> tuple[bytes | None, str | None
     except requests.RequestException as e:
         logger.warning("Dodo invoice request failed: %s", e)
         return None, "network_error"
+
+
+def list_payments_for_subscription(subscription_id: str) -> tuple[list[dict] | None, str | None]:
+    """
+    GET /payments?subscription_id=… → list of payment objects.
+
+    Returns (items, error_tag). Each item is a Dodo payment dict; we don't
+    re-shape here so the caller can pick the fields it wants.
+    """
+    key = normalized_dodo_api_key()
+    if not key or not subscription_id:
+        return None, "not_configured"
+    base = dodo_api_base().rstrip("/")
+    url = f"{base}/payments"
+    try:
+        r = requests.get(
+            url,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Accept": "application/json",
+            },
+            params={"subscription_id": subscription_id, "page_size": 100},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            logger.warning(
+                "Dodo list_payments HTTP %s for subscription_id=%s body=%s",
+                r.status_code,
+                subscription_id,
+                (r.text or "")[:300],
+            )
+            return None, f"upstream_{r.status_code}"
+        body = r.json()
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("Dodo list_payments failed: %s", e)
+        return None, "network_error"
+
+    # Dodo paginated responses come back as { items: [...], total_count, ... };
+    # older shapes may also return a bare list. Handle both defensively.
+    if isinstance(body, dict):
+        items = body.get("items") or body.get("data") or []
+    elif isinstance(body, list):
+        items = body
+    else:
+        items = []
+    return [it for it in items if isinstance(it, dict)], None

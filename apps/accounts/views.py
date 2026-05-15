@@ -3,29 +3,33 @@ import hmac
 import json
 import logging
 import os
+from datetime import timedelta
 
 from django.http import HttpResponse
 from django.utils import timezone
-from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from dodopayments import AuthenticationError, PermissionDeniedError
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from datetime import timedelta
-
-from .models import Subscription, PLAN_LIMITS
-from .subscription_utils import is_internal_email
-from apps.referrals.models import Referral
 from apps.partners.services import get_active_attribution
-from dodopayments import AuthenticationError, PermissionDeniedError
+from apps.referrals.models import Referral
 
 from .dodo_env import (
     dodo_live_mode_enabled,
     dodo_mode_public,
     normalized_dodo_api_key,
 )
+from .dodo_invoice import (
+    extract_payment_id_from_webhook,
+    fetch_payment_invoice_pdf,
+    list_payments_for_subscription,
+)
+from .models import PLAN_LIMITS, Subscription
+from .subscription_utils import is_internal_email
 
 
 def _dodo_opposite_mode_hint() -> str:
@@ -57,7 +61,7 @@ def _dodo_opposite_mode_hint() -> str:
         return ""
     except Exception:
         return ""
-from .dodo_invoice import extract_payment_id_from_webhook, fetch_payment_invoice_pdf
+
 
 logger = logging.getLogger("apps")
 
@@ -103,7 +107,9 @@ class CreateCheckoutSessionView(APIView):
 
         dodo = _get_dodo()
         if not dodo:
-            return Response({"error": "Payment system not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": "Payment system not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         product_map = {
             "starter": os.getenv("DODO_PRODUCT_ID_STARTER", os.getenv("DODO_PRODUCT_ID", "")).strip(),
@@ -112,7 +118,10 @@ class CreateCheckoutSessionView(APIView):
         }
         product_id = product_map.get(plan, "")
         if not product_id:
-            return Response({"error": f"Product not configured for {plan} plan."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"Product not configured for {plan} plan."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         sub, _ = Subscription.objects.get_or_create(email=email)
 
@@ -175,7 +184,9 @@ class CreateCheckoutSessionView(APIView):
                 checkout_kwargs["discount_code"] = discount_code_to_apply
                 logger.info(
                     "checkout: applying discount_code=%s source=%s email=%s",
-                    discount_code_to_apply, discount_source, email,
+                    discount_code_to_apply,
+                    discount_source,
+                    email,
                 )
             checkout_session = dodo.checkout_sessions.create(**checkout_kwargs)
             sub.plan = plan
@@ -207,8 +218,7 @@ class CreateCheckoutSessionView(APIView):
                         "Developer → API Keys, with write access enabled. "
                         "Set DODO_API_KEY or DODO_PAYMENTS_API_KEY to the raw token only (no 'Bearer '). "
                         "Product ids (DODO_PRODUCT_ID_*) must exist in that same mode. "
-                        "Restart Django after editing ranking-be/.env."
-                        + diag
+                        "Restart Django after editing ranking-be/.env." + diag
                     ),
                     "dodo_mode": mode,
                 },
@@ -241,6 +251,7 @@ class CreateCheckoutSessionView(APIView):
 
 class SubscriptionStatusView(APIView):
     """GET /api/payments/status/?email="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -253,49 +264,63 @@ class SubscriptionStatusView(APIView):
 
         # @optiminastic.com → free unlimited access (business tier)
         if is_internal_email(email):
-            return Response({
-                "is_active": True,
-                "status": "active",
-                "current_period_end": None,
-                "currency": "gbp",
-                "plan": "business",
-                "plan_label": "Max (Internal)",
-                "limits": business,
-                "invoice_available": False,
-            })
+            return Response(
+                {
+                    "is_active": True,
+                    "status": "active",
+                    "current_period_end": None,
+                    "currency": "gbp",
+                    "plan": "business",
+                    "plan_label": "Max (Internal)",
+                    "limits": business,
+                    "invoice_available": False,
+                }
+            )
 
         try:
             sub = Subscription.objects.get(email=email)
-            return Response({
-                "is_active": sub.is_active,
-                "status": sub.status,
-                "current_period_end": sub.current_period_end.isoformat() if sub.current_period_end else None,
-                "currency": sub.currency,
-                "plan": sub.plan,
-                "plan_label": sub.limits["label"],
-                "limits": sub.limits,
-                "invoice_available": bool(sub.last_invoice_payment_id),
-            })
+            return Response(
+                {
+                    "is_active": sub.is_active,
+                    "status": sub.status,
+                    "current_period_end": sub.current_period_end.isoformat()
+                    if sub.current_period_end
+                    else None,
+                    "currency": sub.currency,
+                    "plan": sub.plan,
+                    "plan_label": sub.limits["label"],
+                    "limits": sub.limits,
+                    "invoice_available": bool(sub.last_invoice_payment_id),
+                }
+            )
         except Subscription.DoesNotExist:
-            return Response({
-                "is_active": False,
-                "status": "none",
-                "current_period_end": None,
-                "currency": "gbp",
-                "plan": "starter",
-                "plan_label": starter["label"],
-                "limits": starter,
-                "invoice_available": False,
-            })
+            return Response(
+                {
+                    "is_active": False,
+                    "status": "none",
+                    "current_period_end": None,
+                    "currency": "gbp",
+                    "plan": "starter",
+                    "plan_label": starter["label"],
+                    "limits": starter,
+                    "invoice_available": False,
+                }
+            )
 
 
 class DownloadInvoiceView(APIView):
-    """GET /api/payments/invoice/?email= — PDF for latest stored Dodo payment."""
+    """GET /api/payments/invoice/?email=&payment_id= — Invoice PDF for a Dodo payment.
+
+    If ``payment_id`` is omitted, falls back to the subscription's last recorded
+    payment (set by webhook). Passing ``payment_id`` explicitly lets the
+    billing page download any past invoice from the InvoiceListView table.
+    """
 
     permission_classes = [AllowAny]
 
     def get(self, request):
         email = request.query_params.get("email", "").lower().strip()
+        payment_id = (request.query_params.get("payment_id") or "").strip()
         if not email:
             return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -307,26 +332,97 @@ class DownloadInvoiceView(APIView):
         except Subscription.DoesNotExist:
             return Response({"error": "No subscription found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if not sub.last_invoice_payment_id:
+        if not payment_id:
+            payment_id = sub.last_invoice_payment_id
+
+        if not payment_id:
             return Response(
                 {"error": "No invoice yet. It appears after your first successful charge."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        pdf, err = fetch_payment_invoice_pdf(sub.last_invoice_payment_id)
+        pdf, err = fetch_payment_invoice_pdf(payment_id)
         if not pdf:
-            logger.warning("Invoice download failed for %s: %s", email, err)
+            logger.warning("Invoice download failed for %s payment_id=%s: %s", email, payment_id, err)
             return Response(
                 {"error": "Could not retrieve invoice from payment provider."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        safe_name = sub.last_invoice_payment_id.replace("/", "_")[:80]
+        safe_name = payment_id.replace("/", "_")[:80]
         response = HttpResponse(pdf, content_type="application/pdf")
-        response["Content-Disposition"] = (
-            f'attachment; filename="signalor-invoice-{safe_name}.pdf"'
-        )
+        response["Content-Disposition"] = f'attachment; filename="signalor-invoice-{safe_name}.pdf"'
         return response
+
+
+class InvoiceListView(APIView):
+    """GET /api/payments/invoices/?email= — list every Dodo payment for the
+    user's subscription, newest first. Source of truth is Dodo; we don't
+    cache the list locally because amounts/statuses can change (refunds).
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        email = request.query_params.get("email", "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if is_internal_email(email):
+            return Response({"items": []})
+
+        try:
+            sub = Subscription.objects.get(email=email)
+        except Subscription.DoesNotExist:
+            return Response({"items": []})
+
+        if not sub.payment_subscription_id:
+            # Subscription was never linked to a Dodo subscription id (e.g. legacy
+            # rows). Fall back to the single known payment if available so the UI
+            # still shows something.
+            if sub.last_invoice_payment_id:
+                return Response(
+                    {
+                        "items": [
+                            {
+                                "payment_id": sub.last_invoice_payment_id,
+                                "created_at": None,
+                                "amount": None,
+                                "currency": None,
+                                "status": None,
+                            }
+                        ],
+                    }
+                )
+            return Response({"items": []})
+
+        items, err = list_payments_for_subscription(sub.payment_subscription_id)
+        if items is None:
+            logger.warning("Invoice list failed for %s: %s", email, err)
+            return Response({"items": [], "error": "upstream"}, status=status.HTTP_200_OK)
+
+        # Reshape each Dodo payment into the minimal fields the table needs.
+        # Dodo's `total_amount` is in minor units (cents/paise/etc.) — divide
+        # by 100 for display. Status comes through as `status` / `payment_status`.
+        out: list[dict] = []
+        for p in items:
+            amount_minor = p.get("total_amount") or p.get("amount") or 0
+            try:
+                amount = float(amount_minor) / 100.0 if amount_minor else None
+            except (TypeError, ValueError):
+                amount = None
+            out.append(
+                {
+                    "payment_id": p.get("payment_id") or p.get("id") or "",
+                    "created_at": p.get("created_at") or p.get("timestamp"),
+                    "amount": amount,
+                    "currency": p.get("currency") or p.get("settlement_currency") or "",
+                    "status": (p.get("status") or p.get("payment_status") or "").lower() or None,
+                }
+            )
+        # Newest first — Dodo usually orders this way but normalize defensively.
+        out.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        return Response({"items": out})
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -335,6 +431,7 @@ class DodoWebhookView(APIView):
 
     Uses Standard Webhooks spec for signature verification.
     """
+
     permission_classes = [AllowAny]
     authentication_classes = []
 
@@ -357,6 +454,7 @@ class DodoWebhookView(APIView):
         # Standard Webhooks verification: HMAC-SHA256 of "{msg_id}.{timestamp}.{body}"
         try:
             import base64
+
             secret_bytes = base64.b64decode(webhook_secret)
             to_sign = f"{msg_id}.{timestamp}.{payload.decode('utf-8')}"
             expected = base64.b64encode(
@@ -420,12 +518,21 @@ class DodoWebhookView(APIView):
         next_billing = data.get("next_billing_date")
         if next_billing:
             from dateutil.parser import parse as parse_date
+
             try:
                 sub.current_period_end = parse_date(next_billing)
             except (ValueError, TypeError):
                 pass
 
-        sub.save(update_fields=["payment_subscription_id", "payment_customer_id", "status", "current_period_end", "plan"])
+        sub.save(
+            update_fields=[
+                "payment_subscription_id",
+                "payment_customer_id",
+                "status",
+                "current_period_end",
+                "plan",
+            ]
+        )
         self._store_latest_payment_id(data, sub)
         logger.info("Subscription activated for %s (plan=%s)", email, sub.plan)
 
@@ -434,6 +541,7 @@ class DodoWebhookView(APIView):
         # actual refund happens later, on the referrer's renewal webhook.
         try:
             from apps.referrals.services import on_referee_first_payment
+
             on_referee_first_payment(email)
         except Exception:
             logger.exception("referrals: on_referee_first_payment failed for %s", email)
@@ -455,6 +563,7 @@ class DodoWebhookView(APIView):
         next_billing = data.get("next_billing_date")
         if next_billing:
             from dateutil.parser import parse as parse_date
+
             try:
                 sub.current_period_end = parse_date(next_billing)
             except (ValueError, TypeError):
@@ -469,6 +578,7 @@ class DodoWebhookView(APIView):
         # just-charged renewal payment.
         try:
             from apps.referrals.services import on_referrer_renewal
+
             on_referrer_renewal(sub.email, webhook_data=data)
         except Exception:
             logger.exception("referrals: on_referrer_renewal failed for %s", sub.email)
@@ -507,6 +617,7 @@ class DodoWebhookView(APIView):
         # cancelled before the renewal fired (no churn protection).
         try:
             from apps.referrals.services import on_referee_cancelled
+
             on_referee_cancelled(sub.email)
         except Exception:
             logger.exception("referrals: on_referee_cancelled failed for %s", sub.email)
@@ -623,6 +734,7 @@ class DodoWebhookView(APIView):
         the admin can adjust the row manually before payout.
         """
         from decimal import Decimal
+
         from apps.partners.services import record_commission
 
         payment_id = extract_payment_id_from_webhook(data) or data.get("subscription_id", "")
@@ -631,13 +743,14 @@ class DodoWebhookView(APIView):
             return
 
         amount_raw = (
-            data.get("recurring_pre_tax_amount")
-            or data.get("amount")
-            or data.get("total_amount")
-            or 0
+            data.get("recurring_pre_tax_amount") or data.get("amount") or data.get("total_amount") or 0
         )
         try:
-            amount = Decimal(str(amount_raw)) / Decimal(100) if isinstance(amount_raw, int) else Decimal(str(amount_raw))
+            amount = (
+                Decimal(str(amount_raw)) / Decimal(100)
+                if isinstance(amount_raw, int)
+                else Decimal(str(amount_raw))
+            )
         except Exception:
             amount = Decimal("0")
 
@@ -653,12 +766,14 @@ class DodoWebhookView(APIView):
 
 class UsageView(APIView):
     """GET /api/payments/usage/?email= — current usage vs plan limits."""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
+        from apps.analyzer.models import AnalysisRun, PromptTrack
         from apps.organizations.models import Organization
-        from apps.analyzer.models import PromptTrack, AnalysisRun
-        from .subscription_utils import is_internal_email, get_plan_limits
+
+        from .subscription_utils import get_plan_limits, is_internal_email
 
         email = request.query_params.get("email", "").lower().strip()
         if not email:
@@ -675,6 +790,7 @@ class UsageView(APIView):
 
         # Analysis runs this month
         from django.utils import timezone as tz
+
         now = tz.now()
         runs_this_month = AnalysisRun.objects.filter(
             email=email,
@@ -685,25 +801,27 @@ class UsageView(APIView):
         # Engines allowed on current plan
         allowed_engines = limits.get("engines", [])
 
-        return Response({
-            "plan": "business" if is_internal else (
-                _get_sub_plan(email) if not is_internal else "business"
-            ),
-            "limits": {
-                "max_projects": limits["max_projects"],
-                "max_prompts": limits["max_prompts"],
-                "engines": allowed_engines,
-            },
-            "usage": {
-                "projects": projects_used,
-                "prompts": prompts_used,
-                "runs_this_month": runs_this_month,
-            },
-            "at_limit": {
-                "projects": projects_used >= limits["max_projects"],
-                "prompts": prompts_used >= limits["max_prompts"],
-            },
-        })
+        return Response(
+            {
+                "plan": "business"
+                if is_internal
+                else (_get_sub_plan(email) if not is_internal else "business"),
+                "limits": {
+                    "max_projects": limits["max_projects"],
+                    "max_prompts": limits["max_prompts"],
+                    "engines": allowed_engines,
+                },
+                "usage": {
+                    "projects": projects_used,
+                    "prompts": prompts_used,
+                    "runs_this_month": runs_this_month,
+                },
+                "at_limit": {
+                    "projects": projects_used >= limits["max_projects"],
+                    "prompts": prompts_used >= limits["max_prompts"],
+                },
+            }
+        )
 
 
 def _get_sub_plan(email: str) -> str:
@@ -717,19 +835,22 @@ def _get_sub_plan(email: str) -> str:
 
 class PlanListView(APIView):
     """GET /api/plans/ — list all available plans."""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
         plans = []
         for key, cfg in PLAN_LIMITS.items():
-            plans.append({
-                "id": key,
-                "label": cfg["label"],
-                "price_gbp": cfg["price_gbp"],
-                "max_projects": cfg["max_projects"],
-                "max_prompts": cfg["max_prompts"],
-                "engines": cfg["engines"],
-            })
+            plans.append(
+                {
+                    "id": key,
+                    "label": cfg["label"],
+                    "price_gbp": cfg["price_gbp"],
+                    "max_projects": cfg["max_projects"],
+                    "max_prompts": cfg["max_prompts"],
+                    "engines": cfg["engines"],
+                }
+            )
         return Response(plans)
 
 
@@ -751,6 +872,7 @@ class PlanPricesView(APIView):
 
     Each plan entry can be null if its product is not configured.
     """
+
     permission_classes = [AllowAny]
     _CACHE_KEY = "dodo_plan_prices_v1"
     _CACHE_TTL = 600  # 10 minutes
@@ -785,10 +907,7 @@ class PlanPricesView(APIView):
             try:
                 product = dodo.products.retrieve(product_id)
                 if fx_rates is None:
-                    base_ccy = (
-                        getattr(getattr(product, "price", None), "currency", None)
-                        or "USD"
-                    )
+                    base_ccy = getattr(getattr(product, "price", None), "currency", None) or "USD"
                     fx_rates = _fetch_fx_rates(base_ccy)
                 result[plan_key] = _serialize_dodo_price(product, fx_rates)
             except Exception as e:
@@ -855,8 +974,8 @@ def _serialize_dodo_price(product, fx_rates: dict[str, float] | None = None) -> 
 def _fetch_fx_rates(base_currency: str) -> dict[str, float]:
     """Pull spot FX rates with the given base. Cached for 24h. Empty on failure
     — callers degrade gracefully (single-currency display)."""
-    from django.core.cache import cache
     import requests
+    from django.core.cache import cache
 
     base_currency = base_currency.upper()
     cache_key = f"fx_rates_v1_{base_currency}"
@@ -886,6 +1005,7 @@ def _fetch_fx_rates(base_currency: str) -> dict[str, float]:
 
 class TerminateAccountView(APIView):
     """POST /api/account/terminate/ — soft delete, deactivates in 24h."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -896,23 +1016,28 @@ class TerminateAccountView(APIView):
         sub, _ = Subscription.objects.get_or_create(email=email)
 
         if sub.deactivated_at:
-            return Response({
-                "message": "Account already scheduled for deactivation.",
-                "deactivated_at": sub.deactivated_at.isoformat(),
-            })
+            return Response(
+                {
+                    "message": "Account already scheduled for deactivation.",
+                    "deactivated_at": sub.deactivated_at.isoformat(),
+                }
+            )
 
         sub.deactivated_at = timezone.now() + timedelta(hours=24)
         sub.save(update_fields=["deactivated_at"])
         logger.info("Account termination scheduled for %s at %s", email, sub.deactivated_at)
 
-        return Response({
-            "message": "Account scheduled for deactivation in 24 hours.",
-            "deactivated_at": sub.deactivated_at.isoformat(),
-        })
+        return Response(
+            {
+                "message": "Account scheduled for deactivation in 24 hours.",
+                "deactivated_at": sub.deactivated_at.isoformat(),
+            }
+        )
 
 
 class CancelTerminationView(APIView):
     """POST /api/account/cancel-termination/ — cancel soft delete."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -934,6 +1059,7 @@ class CancelTerminationView(APIView):
 
 class DeleteAccountView(APIView):
     """POST /api/account/delete/ — hard delete account and all data."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -949,8 +1075,8 @@ class DeleteAccountView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        from apps.organizations.models import Organization
         from apps.analyzer.models import AnalysisRun
+        from apps.organizations.models import Organization
 
         deleted_counts = {}
 
@@ -971,7 +1097,9 @@ class DeleteAccountView(APIView):
 
         logger.info("Account permanently deleted for %s: %s", email, deleted_counts)
 
-        return Response({
-            "message": "Account permanently deleted.",
-            "deleted": deleted_counts,
-        })
+        return Response(
+            {
+                "message": "Account permanently deleted.",
+                "deleted": deleted_counts,
+            }
+        )
