@@ -1,0 +1,38 @@
+# Python
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# Django
+# db.sqlite3
+*.log
+logs/*.log
+staticfiles/
+media/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+.env*
