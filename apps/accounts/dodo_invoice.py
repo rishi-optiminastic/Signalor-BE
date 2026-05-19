@@ -7,6 +7,7 @@ import logging
 import requests
 
 from .dodo_env import dodo_live_mode_enabled, normalized_dodo_api_key
+from .invoice_storage import cache_invoice, get_cached_invoice, is_b2_enabled
 
 logger = logging.getLogger("apps")
 
@@ -49,12 +50,31 @@ def extract_payment_id_from_webhook(data: dict) -> str:
 
 def fetch_payment_invoice_pdf(payment_id: str) -> tuple[bytes | None, str | None]:
     """
-    GET /invoices/payments/{payment_id} → application/pdf
     Returns (pdf_bytes, error_tag).
+
+    Resolution order:
+      1. B2 cache hit → return immediately, never touch Dodo.
+      2. Dodo ``GET /invoices/payments/{payment_id}`` → on success, upload
+         to B2 (best-effort) and return.
+      3. Both miss → return (None, error_tag).
+
+    The B2 layer turns transient Dodo failures (401 misconfig, 5xx, 404 on
+    a previously valid id) into a non-event for any invoice we've fetched
+    once before.
     """
-    key = normalized_dodo_api_key()
-    if not key or not payment_id:
+    if not payment_id:
         return None, "not_configured"
+
+    # 1. Cache hit.
+    cached = get_cached_invoice(payment_id)
+    if cached:
+        return cached, None
+
+    key = normalized_dodo_api_key()
+    if not key:
+        return None, "not_configured"
+
+    # 2. Live Dodo fetch.
     base = dodo_api_base().rstrip("/")
     url = f"{base}/invoices/payments/{payment_id}"
     try:
@@ -77,6 +97,10 @@ def fetch_payment_invoice_pdf(payment_id: str) -> tuple[bytes | None, str | None
         if not r.content or len(r.content) < 100:
             logger.warning("Dodo invoice empty/short response for payment_id=%s", payment_id)
             return None, "empty_pdf"
+
+        # 3. Populate cache. Failure here is non-fatal for the request.
+        if is_b2_enabled():
+            cache_invoice(payment_id, r.content)
         return r.content, None
     except requests.RequestException as e:
         logger.warning("Dodo invoice request failed: %s", e)

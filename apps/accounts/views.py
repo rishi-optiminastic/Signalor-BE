@@ -350,8 +350,14 @@ class DownloadInvoiceView(APIView):
         pdf, err = fetch_payment_invoice_pdf(payment_id)
         if not pdf:
             logger.warning("Invoice download failed for %s payment_id=%s: %s", email, payment_id, err)
+            # Surface the upstream tag so the billing UI / debugging doesn't
+            # need Render logs to tell apart 401 (key/mode mismatch),
+            # 404 (payment not in this Dodo account), 5xx (Dodo flaky), etc.
             return Response(
-                {"error": "Could not retrieve invoice from payment provider."},
+                {
+                    "error": "Could not retrieve invoice from payment provider.",
+                    "upstream": err or "unknown",
+                },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -751,6 +757,32 @@ class DodoWebhookView(APIView):
             return
         sub.last_invoice_payment_id = pid
         sub.save(update_fields=["last_invoice_payment_id"])
+        # Pre-warm B2 cache so the first billing-page click serves from
+        # storage instead of waiting on (or failing against) Dodo. Runs in
+        # a daemon thread so the webhook returns 200 immediately — Dodo
+        # retries the whole event on a slow ack and we don't want that.
+        self._prewarm_invoice_cache(pid)
+
+    def _prewarm_invoice_cache(self, payment_id: str) -> None:
+        """Fire-and-forget: fetch the invoice PDF and push it into B2."""
+        from .invoice_storage import is_b2_enabled
+
+        if not is_b2_enabled() or not payment_id:
+            return
+        import threading
+
+        def _run():
+            try:
+                # fetch_payment_invoice_pdf caches to B2 on success.
+                from .dodo_invoice import fetch_payment_invoice_pdf
+
+                pdf, err = fetch_payment_invoice_pdf(payment_id)
+                if not pdf:
+                    logger.info("Invoice pre-warm failed for %s: %s", payment_id, err)
+            except Exception:
+                logger.exception("Invoice pre-warm crashed for %s", payment_id)
+
+        threading.Thread(target=_run, daemon=True, name=f"invoice-prewarm-{payment_id[:12]}").start()
 
     def _record_partner_commission(self, email, data):
         """Look up affiliate attribution and stage a PENDING commission row.
