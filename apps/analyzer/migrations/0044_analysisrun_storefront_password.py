@@ -9,10 +9,31 @@ class Migration(migrations.Migration):
         ('analyzer', '0035_merge_20260424_0957'),
     ]
 
+    # Wrap the column add in SeparateDatabaseAndState so Django updates its
+    # model state regardless, but the SQL itself is idempotent via
+    # `IF NOT EXISTS` — staging already has this column from a previous
+    # deploy and would otherwise fail with `DuplicateColumn`.
     operations = [
-        migrations.AddField(
-            model_name='analysisrun',
-            name='storefront_password',
-            field=models.CharField(blank=True, default='', max_length=255),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunSQL(
+                    sql=(
+                        "ALTER TABLE analyzer_analysisrun "
+                        "ADD COLUMN IF NOT EXISTS storefront_password "
+                        "VARCHAR(255) NOT NULL DEFAULT '';"
+                    ),
+                    reverse_sql=(
+                        "ALTER TABLE analyzer_analysisrun "
+                        "DROP COLUMN IF EXISTS storefront_password;"
+                    ),
+                ),
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name='analysisrun',
+                    name='storefront_password',
+                    field=models.CharField(blank=True, default='', max_length=255),
+                ),
+            ],
         ),
     ]

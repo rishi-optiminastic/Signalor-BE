@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 
 from apps.partners.services import get_active_attribution
 from apps.referrals.models import Referral
+from core.throttling import PollingThrottle
 
 from .dodo_env import (
     dodo_live_mode_enabled,
@@ -27,9 +28,14 @@ from .dodo_invoice import (
     extract_payment_id_from_webhook,
     fetch_payment_invoice_pdf,
     list_payments_for_subscription,
+    retrieve_payment,
+    retrieve_product,
+    retrieve_subscription,
 )
+from .invoice_storage import cache_invoice, is_b2_enabled
 from .models import PLAN_LIMITS, Subscription
 from .subscription_utils import is_internal_email
+from .zero_invoice import render_zero_invoice_pdf
 
 
 def _dodo_opposite_mode_hint() -> str:
@@ -93,6 +99,11 @@ class CreateCheckoutSessionView(APIView):
         # that have Adaptive Pricing enabled in the Dodo dashboard.
         country_raw = (request.data.get("country") or "").strip().upper()
         currency_raw = (request.data.get("currency") or "").strip().upper()
+        # Affiliate code captured client-side in localStorage. An existing user
+        # who clicked a creator link won't have a PartnerAttribution row yet
+        # (those are only minted at signup) — record one now so the discount
+        # auto-applies below and the webhook can credit the partner.
+        partner_code = (request.data.get("partner_code") or "").strip().upper()
 
         if not email:
             return Response({"error": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -132,6 +143,13 @@ class CreateCheckoutSessionView(APIView):
 
         try:
             attribution = get_active_attribution(email)
+            # If the buyer just clicked an affiliate link but never went
+            # through signup, attribution will be empty. Mint one from the
+            # `partner_code` carried up from the client.
+            if not attribution and partner_code:
+                from apps.partners.services import set_attribution
+
+                attribution = set_attribution(email, partner_code, landing_path="checkout")
             if attribution and referee_code_env:
                 discount_code_to_apply = referee_code_env
                 discount_source = f"affiliate partner={attribution.partner.code}"
@@ -242,6 +260,9 @@ class SubscriptionStatusView(APIView):
     """GET /api/payments/status/?email="""
 
     permission_classes = [AllowAny]
+    # Polled every 2s by /payments/success and on every dashboard mount —
+    # the default 100/hour anon ceiling locks legit users out within seconds.
+    throttle_classes = [PollingThrottle]
 
     def get(self, request):
         starter = PLAN_LIMITS["starter"]
@@ -331,17 +352,73 @@ class DownloadInvoiceView(APIView):
             )
 
         pdf, err = fetch_payment_invoice_pdf(payment_id)
+
+        # Dodo only generates invoice PDFs for non-zero payments. When it
+        # 404s, check if this is a $0 payment (almost always: a 100%-off
+        # promo). If so, generate a Signalor-branded invoice locally so the
+        # customer still has a receipt that itemises the discount.
+        if not pdf and err == "upstream_404":
+            payment_obj, _ = retrieve_payment(payment_id)
+            if payment_obj and (payment_obj.get("total_amount") or 0) == 0:
+                # Look up the product so the invoice can show the listed price
+                # (and the discount math that brings it to zero). For
+                # subscription payments, product_cart is None — fall back to
+                # the subscription's product_id.
+                product = None
+                product_lookup_id = ""
+                cart = payment_obj.get("product_cart") or []
+                if isinstance(cart, list) and cart:
+                    product_lookup_id = (cart[0] or {}).get("product_id") or ""
+                if not product_lookup_id and payment_obj.get("subscription_id"):
+                    sub_obj, _ = retrieve_subscription(payment_obj["subscription_id"])
+                    if sub_obj:
+                        product_lookup_id = sub_obj.get("product_id") or ""
+                if product_lookup_id:
+                    product, _ = retrieve_product(product_lookup_id)
+                pdf = render_zero_invoice_pdf(payment_obj, product)
+                if pdf and is_b2_enabled():
+                    cache_invoice(payment_id, pdf)
+
         if not pdf:
             logger.warning("Invoice download failed for %s payment_id=%s: %s", email, payment_id, err)
+            # 404 from Dodo usually means a payment that never existed —
+            # semantically NOT a gateway error, so return 404 to avoid
+            # Cloudflare wrapping it in its own 502 page. Other upstream tags
+            # (network_error, upstream_5xx, not_configured) are genuine infra
+            # failures → 502.
+            http_status = status.HTTP_404_NOT_FOUND if err == "upstream_404" else status.HTTP_502_BAD_GATEWAY
             return Response(
-                {"error": "Could not retrieve invoice from payment provider."},
-                status=status.HTTP_502_BAD_GATEWAY,
+                {
+                    "error": "Could not retrieve invoice from payment provider.",
+                    "upstream": err or "unknown",
+                },
+                status=http_status,
             )
 
         safe_name = payment_id.replace("/", "_")[:80]
         response = HttpResponse(pdf, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="signalor-invoice-{safe_name}.pdf"'
         return response
+
+
+def _shape_payment_row(p: dict) -> dict:
+    """Reduce a Dodo payment object to the minimal shape the billing table needs.
+
+    Dodo's ``total_amount`` is in minor units (cents/paise/etc.) — divide by 100
+    for display. Status comes through as ``status`` or ``payment_status``.
+    """
+    amount_minor = p.get("total_amount") or p.get("amount") or 0
+    try:
+        amount = float(amount_minor) / 100.0 if amount_minor else None
+    except (TypeError, ValueError):
+        amount = None
+    return {
+        "payment_id": p.get("payment_id") or p.get("id") or "",
+        "created_at": p.get("created_at") or p.get("timestamp"),
+        "amount": amount,
+        "currency": p.get("currency") or p.get("settlement_currency") or "",
+        "status": (p.get("status") or p.get("payment_status") or "").lower() or None,
+    }
 
 
 class InvoiceListView(APIView):
@@ -367,22 +444,33 @@ class InvoiceListView(APIView):
 
         if not sub.payment_subscription_id:
             # Subscription was never linked to a Dodo subscription id (e.g. legacy
-            # rows). Fall back to the single known payment if available so the UI
-            # still shows something.
+            # rows or one-off charges). Fetch the single known payment by id so
+            # the UI gets real date/amount/status instead of empty cells.
             if sub.last_invoice_payment_id:
-                return Response(
-                    {
-                        "items": [
-                            {
-                                "payment_id": sub.last_invoice_payment_id,
-                                "created_at": None,
-                                "amount": None,
-                                "currency": None,
-                                "status": None,
-                            }
-                        ],
-                    }
-                )
+                payment, err = retrieve_payment(sub.last_invoice_payment_id)
+                if payment is None:
+                    logger.warning(
+                        "Invoice retrieve failed for %s payment=%s: %s",
+                        email,
+                        sub.last_invoice_payment_id,
+                        err,
+                    )
+                    # Surface the payment_id so the PDF link still works, even
+                    # if Dodo couldn't enrich the other fields.
+                    return Response(
+                        {
+                            "items": [
+                                {
+                                    "payment_id": sub.last_invoice_payment_id,
+                                    "created_at": None,
+                                    "amount": None,
+                                    "currency": None,
+                                    "status": None,
+                                }
+                            ],
+                        }
+                    )
+                return Response({"items": [_shape_payment_row(payment)]})
             return Response({"items": []})
 
         items, err = list_payments_for_subscription(sub.payment_subscription_id)
@@ -390,25 +478,7 @@ class InvoiceListView(APIView):
             logger.warning("Invoice list failed for %s: %s", email, err)
             return Response({"items": [], "error": "upstream"}, status=status.HTTP_200_OK)
 
-        # Reshape each Dodo payment into the minimal fields the table needs.
-        # Dodo's `total_amount` is in minor units (cents/paise/etc.) — divide
-        # by 100 for display. Status comes through as `status` / `payment_status`.
-        out: list[dict] = []
-        for p in items:
-            amount_minor = p.get("total_amount") or p.get("amount") or 0
-            try:
-                amount = float(amount_minor) / 100.0 if amount_minor else None
-            except (TypeError, ValueError):
-                amount = None
-            out.append(
-                {
-                    "payment_id": p.get("payment_id") or p.get("id") or "",
-                    "created_at": p.get("created_at") or p.get("timestamp"),
-                    "amount": amount,
-                    "currency": p.get("currency") or p.get("settlement_currency") or "",
-                    "status": (p.get("status") or p.get("payment_status") or "").lower() or None,
-                }
-            )
+        out = [_shape_payment_row(p) for p in items]
         # Newest first — Dodo usually orders this way but normalize defensively.
         out.sort(key=lambda r: r.get("created_at") or "", reverse=True)
         return Response({"items": out})
@@ -440,11 +510,18 @@ class DodoWebhookView(APIView):
             logger.warning("Missing webhook signature headers")
             return HttpResponse(status=400)
 
-        # Standard Webhooks verification: HMAC-SHA256 of "{msg_id}.{timestamp}.{body}"
+        # Standard Webhooks verification: HMAC-SHA256 of "{msg_id}.{timestamp}.{body}".
+        # Per the spec, the secret arrives as "whsec_<base64>"; strip the prefix
+        # before decoding — leaving it in makes base64 fail with a "1 more than
+        # a multiple of 4" length error because `_` isn't in the standard
+        # base64 alphabet.
         try:
             import base64
 
-            secret_bytes = base64.b64decode(webhook_secret)
+            secret_material = webhook_secret
+            if secret_material.startswith("whsec_"):
+                secret_material = secret_material[len("whsec_") :]
+            secret_bytes = base64.b64decode(secret_material)
             to_sign = f"{msg_id}.{timestamp}.{payload.decode('utf-8')}"
             expected = base64.b64encode(
                 hmac.new(secret_bytes, to_sign.encode("utf-8"), hashlib.sha256).digest()
@@ -481,6 +558,10 @@ class DodoWebhookView(APIView):
             self._handle_subscription_cancelled(data)
         elif event_type == "payment.succeeded":
             self._handle_payment_succeeded(data)
+        elif event_type in ("payment.refunded", "refund.succeeded", "refund.created"):
+            # Dodo's exact refund event name has varied across SDK versions;
+            # cover the three observed forms. Body is best-effort.
+            self._handle_payment_refunded(data)
 
         return HttpResponse(status=200)
 
@@ -607,6 +688,42 @@ class DodoWebhookView(APIView):
         except Exception:
             logger.exception("referrals: on_referee_cancelled failed for %s", sub.email)
 
+    def _handle_payment_refunded(self, data):
+        """Payment refunded — cancel any partner commission tied to that payment.
+
+        Dodo refund payloads can carry either ``original_payment_id`` (newer
+        SDKs) or just ``payment_id``. Try both so we cancel the right row even
+        if Dodo's field naming drifts. PAID commissions are never reversed —
+        once the creator has been wired the money we eat that refund.
+        """
+        # Prefer original_payment_id when present (refund payloads). Fall back
+        # to the recursive helper, which finds any nested payment_id.
+        original_payment_id = ""
+        if isinstance(data, dict):
+            for key in ("original_payment_id", "originalPaymentId"):
+                v = data.get(key)
+                if isinstance(v, str) and v.strip():
+                    original_payment_id = v.strip()
+                    break
+            if not original_payment_id:
+                obj = data.get("object")
+                if isinstance(obj, dict):
+                    for key in ("original_payment_id", "originalPaymentId"):
+                        v = obj.get(key)
+                        if isinstance(v, str) and v.strip():
+                            original_payment_id = v.strip()
+                            break
+        payment_id = original_payment_id or extract_payment_id_from_webhook(data)
+        if not payment_id:
+            logger.info("Dodo refund webhook: no payment_id resolvable; skipping")
+            return
+        try:
+            from apps.partners.services import cancel_commission_for_refund
+
+            cancel_commission_for_refund(payment_id)
+        except Exception:
+            logger.exception("partners: cancel_commission_for_refund failed payment=%s", payment_id)
+
     def _handle_payment_succeeded(self, data):
         """One-time payment succeeded — activate if linked to subscription."""
         email = self._extract_email(data)
@@ -674,6 +791,32 @@ class DodoWebhookView(APIView):
             return
         sub.last_invoice_payment_id = pid
         sub.save(update_fields=["last_invoice_payment_id"])
+        # Pre-warm B2 cache so the first billing-page click serves from
+        # storage instead of waiting on (or failing against) Dodo. Runs in
+        # a daemon thread so the webhook returns 200 immediately — Dodo
+        # retries the whole event on a slow ack and we don't want that.
+        self._prewarm_invoice_cache(pid)
+
+    def _prewarm_invoice_cache(self, payment_id: str) -> None:
+        """Fire-and-forget: fetch the invoice PDF and push it into B2."""
+        from .invoice_storage import is_b2_enabled
+
+        if not is_b2_enabled() or not payment_id:
+            return
+        import threading
+
+        def _run():
+            try:
+                # fetch_payment_invoice_pdf caches to B2 on success.
+                from .dodo_invoice import fetch_payment_invoice_pdf
+
+                pdf, err = fetch_payment_invoice_pdf(payment_id)
+                if not pdf:
+                    logger.info("Invoice pre-warm failed for %s: %s", payment_id, err)
+            except Exception:
+                logger.exception("Invoice pre-warm crashed for %s", payment_id)
+
+        threading.Thread(target=_run, daemon=True, name=f"invoice-prewarm-{payment_id[:12]}").start()
 
     def _record_partner_commission(self, email, data):
         """Look up affiliate attribution and stage a PENDING commission row.
@@ -718,6 +861,9 @@ class UsageView(APIView):
     """GET /api/payments/usage/?email= — current usage vs plan limits."""
 
     permission_classes = [AllowAny]
+    # Read endpoint used by onboarding, billing, and gate cards — must not
+    # share the strict anon ceiling.
+    throttle_classes = [PollingThrottle]
 
     def get(self, request):
         from apps.analyzer.models import AnalysisRun, PromptTrack
@@ -824,6 +970,10 @@ class PlanPricesView(APIView):
     """
 
     permission_classes = [AllowAny]
+    # Loaded by the landing pricing teaser + /pricing — gets hit on every
+    # public visit. Cache absorbs cost; throttle protects against the rare
+    # loop without locking out legitimate viewers.
+    throttle_classes = [PollingThrottle]
     _CACHE_KEY = "dodo_plan_prices_v1"
     _CACHE_TTL = 600  # 10 minutes
 
@@ -1053,3 +1203,141 @@ class DeleteAccountView(APIView):
                 "deleted": deleted_counts,
             }
         )
+
+
+class ProfileView(APIView):
+    """GET /api/account/profile/?email= — user-editable profile fields.
+
+    Returns the user-uploaded B2 photo URL when present; the caller is
+    responsible for falling back to the Google OAuth photo from the
+    better-auth session when ``photo_url`` is null.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [PollingThrottle]
+
+    def get(self, request):
+        from .models import User
+        from .profile_storage import photo_url
+
+        email = (request.query_params.get("email") or "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response(
+                {
+                    "email": email,
+                    "first_name": "",
+                    "last_name": "",
+                    "phone_number": "",
+                    "photo_url": None,
+                }
+            )
+
+        return Response(
+            {
+                "email": user.email,
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "phone_number": user.phone_number or "",
+                "photo_url": photo_url(user.profile_photo_key) if user.profile_photo_key else None,
+            }
+        )
+
+    def patch(self, request):
+        """Update editable name / phone fields. Email is identity, not editable here."""
+        from .models import User
+
+        email = (request.data.get("email") or "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        changed = []
+        for field in ("first_name", "last_name", "phone_number"):
+            if field in request.data:
+                value = (request.data.get(field) or "").strip()
+                if getattr(user, field) != value:
+                    setattr(user, field, value)
+                    changed.append(field)
+        if changed:
+            user.save(update_fields=changed)
+        return Response({"updated": changed})
+
+
+class ProfilePhotoView(APIView):
+    """POST/DELETE /api/account/profile/photo/ — upload or remove a profile photo.
+
+    POST is multipart/form-data with ``email`` and a ``photo`` file part.
+    On success, returns the fresh pre-signed URL so the UI can render
+    immediately without a follow-up GET.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .models import User
+        from .profile_storage import delete_photo, is_b2_enabled, photo_url, upload_photo
+
+        if not is_b2_enabled():
+            return Response(
+                {"error": "Photo uploads are not configured on this server."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        email = (request.data.get("email") or "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        photo = request.FILES.get("photo")
+        if not photo:
+            return Response(
+                {"error": "Missing 'photo' file part."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = photo.read()
+        new_key, err = upload_photo(user.id, data, photo.content_type or "")
+        if not new_key:
+            return Response({"error": err or "Upload failed."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Best-effort clean up the previous photo so we don't accumulate orphans.
+        old_key = user.profile_photo_key
+        user.profile_photo_key = new_key
+        user.save(update_fields=["profile_photo_key"])
+        if old_key and old_key != new_key:
+            delete_photo(old_key)
+
+        return Response({"photo_url": photo_url(new_key)})
+
+    def delete(self, request):
+        from .models import User
+        from .profile_storage import delete_photo
+
+        email = (request.data.get("email") or request.query_params.get("email") or "").lower().strip()
+        if not email:
+            return Response({"error": "Email required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if user.profile_photo_key:
+            delete_photo(user.profile_photo_key)
+            user.profile_photo_key = ""
+            user.save(update_fields=["profile_photo_key"])
+
+        return Response({"photo_url": None})

@@ -392,17 +392,29 @@ def crawl_site(
         max_blog=3,
     )
 
-    # Crawl additional pages (skip homepage, already crawled)
-    additional: list[CrawlResult] = []
+    # Crawl additional pages in parallel — they're independent HTTP fetches,
+    # so a thread pool gets us close to single-page latency instead of
+    # sum-of-all-pages. max_workers=6 stays well under typical origin
+    # connection limits.
+    from concurrent.futures import ThreadPoolExecutor
+
     urls_to_crawl = [u for u in site_map.all_urls if u != base_url][:max_pages]
 
-    for url in urls_to_crawl:
+    def _fetch(url: str) -> CrawlResult | None:
         try:
-            result = crawl_page(url, storefront_password="")  # Session already authenticated
-            result.session = homepage_result.session  # Share the session
-            additional.append(result)
+            result = crawl_page(url, storefront_password="")
+            result.session = homepage_result.session
+            return result
         except Exception as exc:
             logger.warning("Failed to crawl %s: %s", url, exc)
+            return None
+
+    additional: list[CrawlResult] = []
+    if urls_to_crawl:
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            for result in executor.map(_fetch, urls_to_crawl):
+                if result is not None:
+                    additional.append(result)
 
     logger.info("Site crawl complete: homepage + %d additional pages", len(additional))
 

@@ -136,16 +136,37 @@ def _save_probes_and_tracks(
             brand_prompts = []
         brand_prompts = brand_prompts[:gen_count]
 
-    # Fire each AI-generated prompt and save results
+    # Fire all prompts in parallel — each prompt hits 4 LLMs + Google + Bing
+    # (independent of every other prompt), so a thread pool collapses what was
+    # ~10 × per-prompt-latency down to roughly one prompt's worth of wall time.
+    # max_workers=5 throttles concurrent provider load while still getting
+    # most of the speedup; each worker internally fans out to all engines.
     brand_host = host_of(brand_url)
     rival_hosts = competitor_hosts_for_run(run)
-    for prompt_text in brand_prompts:
+
+    def _process_prompt(prompt_text: str):
+        intent, prompt_type = classify_prompt_intent_and_type(
+            prompt_text, brand_name, brand_url,
+        )
+        engine_results = fire_prompt_across_engines(
+            prompt_text, brand_name, brand_url, runs=1, allowed_engines=allowed_engines,
+        )
+        return prompt_text, intent, prompt_type, engine_results
+
+    processed: list[tuple[str, str, str, list[dict]]] = []
+    if brand_prompts:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(_process_prompt, p) for p in brand_prompts]
+            for future in as_completed(futures):
+                try:
+                    processed.append(future.result())
+                except Exception as exc:
+                    logger.warning("Prompt processing failed for run %d: %s", run.id, exc)
+
+    # DB writes stay sequential — Django ORM isn't thread-safe across saves
+    # on SQLite, and the writes themselves are fast (no LLM latency).
+    for prompt_text, intent, prompt_type, engine_results in processed:
         try:
-            intent, prompt_type = classify_prompt_intent_and_type(
-                prompt_text,
-                brand_name,
-                brand_url,
-            )
             track = PromptTrack.objects.create(
                 analysis_run=run,
                 prompt_text=prompt_text,
@@ -153,14 +174,12 @@ def _save_probes_and_tracks(
                 intent=intent,
                 prompt_type=prompt_type,
             )
-            engine_results = fire_prompt_across_engines(
-                prompt_text, brand_name, brand_url, runs=1, allowed_engines=allowed_engines
-            )
             for r in engine_results:
                 persist_prompt_result(track, r, brand_host, rival_hosts)
 
-            # Compute and save score + 5-factor breakdown
-            all_results = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
+            all_results = list(track.results.values(
+                "brand_mentioned", "sentiment", "rank_position", "confidence", "engine",
+            ))
             score_data = compute_prompt_score(all_results)
             track.score = score_data["score"]
             track.authority_score = score_data["authority_score"]
@@ -173,7 +192,7 @@ def _save_probes_and_tracks(
                 "structural_score", "semantic_score", "third_party_score",
             ])
         except Exception as exc:
-            logger.warning("PromptTrack creation failed for run %d: %s", run.id, exc)
+            logger.warning("PromptTrack persist failed for run %d: %s", run.id, exc)
 
 
 def _update_status(run: AnalysisRun, status: str, progress: int = 0):
