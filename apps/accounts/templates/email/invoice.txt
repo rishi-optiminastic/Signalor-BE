@@ -1,0 +1,17 @@
+Your Signalor invoice is attached.
+
+Hi {{ customer_name }},
+
+Here's your receipt for the {{ plan_label }}{% if is_renewal %} renewal{% endif %}.
+The PDF is attached — keep it for your records.
+
+  Plan:        {{ plan_label }}
+  Date:        {{ issue_date }}
+  Payment ID:  {{ payment_id }}
+
+Can't see the attachment? Download from your billing page:
+{{ invoice_url }}
+
+Questions about a charge? Reply here or write to billing@signalor.ai.
+
+— Signalor (signalor.ai)

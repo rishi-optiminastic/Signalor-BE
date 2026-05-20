@@ -19,6 +19,7 @@ from apps.partners.services import get_active_attribution
 from apps.referrals.models import Referral
 from core.throttling import PollingThrottle
 
+from .billing_emails import send_billing_emails
 from .dodo_env import (
     dodo_live_mode_enabled,
     dodo_mode_public,
@@ -26,16 +27,12 @@ from .dodo_env import (
 )
 from .dodo_invoice import (
     extract_payment_id_from_webhook,
-    fetch_payment_invoice_pdf,
     list_payments_for_subscription,
     retrieve_payment,
-    retrieve_product,
-    retrieve_subscription,
 )
-from .invoice_storage import cache_invoice, is_b2_enabled
+from .invoice_pdf import resolve_invoice_pdf
 from .models import PLAN_LIMITS, Subscription
 from .subscription_utils import is_internal_email
-from .zero_invoice import render_zero_invoice_pdf
 
 
 def _dodo_opposite_mode_hint() -> str:
@@ -351,33 +348,7 @@ class DownloadInvoiceView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        pdf, err = fetch_payment_invoice_pdf(payment_id)
-
-        # Dodo only generates invoice PDFs for non-zero payments. When it
-        # 404s, check if this is a $0 payment (almost always: a 100%-off
-        # promo). If so, generate a Signalor-branded invoice locally so the
-        # customer still has a receipt that itemises the discount.
-        if not pdf and err == "upstream_404":
-            payment_obj, _ = retrieve_payment(payment_id)
-            if payment_obj and (payment_obj.get("total_amount") or 0) == 0:
-                # Look up the product so the invoice can show the listed price
-                # (and the discount math that brings it to zero). For
-                # subscription payments, product_cart is None — fall back to
-                # the subscription's product_id.
-                product = None
-                product_lookup_id = ""
-                cart = payment_obj.get("product_cart") or []
-                if isinstance(cart, list) and cart:
-                    product_lookup_id = (cart[0] or {}).get("product_id") or ""
-                if not product_lookup_id and payment_obj.get("subscription_id"):
-                    sub_obj, _ = retrieve_subscription(payment_obj["subscription_id"])
-                    if sub_obj:
-                        product_lookup_id = sub_obj.get("product_id") or ""
-                if product_lookup_id:
-                    product, _ = retrieve_product(product_lookup_id)
-                pdf = render_zero_invoice_pdf(payment_obj, product)
-                if pdf and is_b2_enabled():
-                    cache_invoice(payment_id, pdf)
+        pdf, err = resolve_invoice_pdf(payment_id)
 
         if not pdf:
             logger.warning("Invoice download failed for %s payment_id=%s: %s", email, payment_id, err)
@@ -602,6 +573,14 @@ class DodoWebhookView(APIView):
         self._store_latest_payment_id(data, sub)
         logger.info("Subscription activated for %s (plan=%s)", email, sub.plan)
 
+        # Post-payment email sequence (payment-success → invoice → welcome).
+        # Runs in a background thread; idempotent on last_invoice_payment_id.
+        if not is_internal_email(email):
+            sub.refresh_from_db(
+                fields=["last_invoice_payment_id", "last_billing_emails_payment_id", "welcome_email_sent_at"]
+            )
+            self._queue_billing_emails(sub, is_renewal=False)
+
         # Referral hook (referee side): if THIS email was referred, mark the
         # Referral as PAID and queue a 20%-off reward for the referrer. The
         # actual refund happens later, on the referrer's renewal webhook.
@@ -638,6 +617,14 @@ class DodoWebhookView(APIView):
         sub.save(update_fields=["status", "current_period_end"])
         self._store_latest_payment_id(data, sub)
         logger.info("Subscription renewed for %s", sub.email)
+
+        # Renewal: fire the same 3-email sequence with is_renewal=True so
+        # the welcome template renders the "thanks for staying" variant.
+        if not is_internal_email(sub.email):
+            sub.refresh_from_db(
+                fields=["last_invoice_payment_id", "last_billing_emails_payment_id", "welcome_email_sent_at"]
+            )
+            self._queue_billing_emails(sub, is_renewal=True)
 
         # Referral hook: a renewal landed — if this email is a referrer with
         # any queued PENDING ReferralReward, issue a 20% partial refund on the
@@ -796,6 +783,29 @@ class DodoWebhookView(APIView):
         # a daemon thread so the webhook returns 200 immediately — Dodo
         # retries the whole event on a slow ack and we don't want that.
         self._prewarm_invoice_cache(pid)
+
+    def _queue_billing_emails(self, sub, is_renewal: bool) -> None:
+        """Fire the 3-email post-payment sequence (success → invoice → welcome)
+        in a background thread. Idempotent on payment_id: re-delivery of the
+        same Dodo webhook won't double-email the customer.
+        """
+        if not sub or not sub.last_invoice_payment_id:
+            return
+        pid = sub.last_invoice_payment_id
+        if sub.last_billing_emails_payment_id == pid:
+            return
+        sub.last_billing_emails_payment_id = pid
+        update_fields = ["last_billing_emails_payment_id"]
+        if not is_renewal and not sub.welcome_email_sent_at:
+            sub.welcome_email_sent_at = timezone.now()
+            update_fields.append("welcome_email_sent_at")
+        sub.save(update_fields=update_fields)
+        send_billing_emails(
+            email=sub.email,
+            plan=sub.plan,
+            payment_id=pid,
+            is_renewal=is_renewal,
+        )
 
     def _prewarm_invoice_cache(self, payment_id: str) -> None:
         """Fire-and-forget: fetch the invoice PDF and push it into B2."""

@@ -1,0 +1,22 @@
+{% if is_renewal %}Thanks for staying with Signalor.{% else %}Welcome to Signalor.{% endif %}
+
+Hi {{ customer_name }},
+
+{% if is_renewal %}Your {{ plan_label }} plan has renewed for another month.{% else %}We're glad you're here. Your {{ plan_label }} plan is active.{% endif %}
+
+Here's the fastest path to a first signal:
+
+  1. Add your domain
+     Tell Signalor which site to track.
+
+  2. Run your first GEO analysis
+     See how AI engines describe you today — and where to fix.
+
+  3. Connect GA4 (optional)
+     Overlay traffic on your visibility score for an end-to-end view.
+
+Open your dashboard: {{ dashboard_url }}
+
+Questions? Just reply to this email — a human reads every one.
+
+— Signalor (signalor.ai)

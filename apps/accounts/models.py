@@ -124,6 +124,13 @@ class Subscription(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UNPAID)
     current_period_end = models.DateTimeField(null=True, blank=True)
     currency = models.CharField(max_length=3, default="usd")
+    # Billing-email idempotency. last_billing_emails_payment_id is the
+    # payment_id we last fired the success/invoice/welcome trio for, so
+    # retried webhooks don't re-spam the customer. welcome_email_sent_at
+    # marks the first activation — the welcome template flips copy from
+    # "Welcome to Signalor" to "Thanks for renewing" once this is set.
+    last_billing_emails_payment_id = models.CharField(max_length=255, blank=True, default="")
+    welcome_email_sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

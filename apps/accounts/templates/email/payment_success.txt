@@ -1,0 +1,18 @@
+Payment received — you're all set.
+
+Hi {{ customer_name }},
+
+We've received your payment for the {{ plan_label }} plan. Your
+subscription is now active.
+
+  Plan:        {{ plan_label }}
+  Payment ID:  {{ payment_id_short }}
+
+Your invoice will arrive separately in the next couple of minutes.
+A welcome guide with your first steps follows shortly after.
+
+Open your dashboard: {{ dashboard_url }}
+
+Need help? Reply to this email or write to billing@signalor.ai.
+
+— Signalor (signalor.ai)
