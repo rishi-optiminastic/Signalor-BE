@@ -107,6 +107,50 @@ def fetch_payment_invoice_pdf(payment_id: str) -> tuple[bytes | None, str | None
         return None, "network_error"
 
 
+def retrieve_subscription(subscription_id: str) -> tuple[dict | None, str | None]:
+    """GET /subscriptions/{subscription_id} → subscription object."""
+    key = normalized_dodo_api_key()
+    if not key or not subscription_id:
+        return None, "not_configured"
+    base = dodo_api_base().rstrip("/")
+    try:
+        r = requests.get(
+            f"{base}/subscriptions/{subscription_id}",
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return None, f"upstream_{r.status_code}"
+        body = r.json()
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("Dodo retrieve_subscription failed: %s", e)
+        return None, "network_error"
+    return (body if isinstance(body, dict) else None), None
+
+
+def retrieve_product(product_id: str) -> tuple[dict | None, str | None]:
+    """GET /products/{product_id} → product object (used to look up listed price
+    when building a synthetic invoice for a $0 payment).
+    """
+    key = normalized_dodo_api_key()
+    if not key or not product_id:
+        return None, "not_configured"
+    base = dodo_api_base().rstrip("/")
+    try:
+        r = requests.get(
+            f"{base}/products/{product_id}",
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return None, f"upstream_{r.status_code}"
+        body = r.json()
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("Dodo retrieve_product failed: %s", e)
+        return None, "network_error"
+    return (body if isinstance(body, dict) else None), None
+
+
 def retrieve_payment(payment_id: str) -> tuple[dict | None, str | None]:
     """GET /payments/{payment_id} → single payment object.
 

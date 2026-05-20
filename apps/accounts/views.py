@@ -29,9 +29,13 @@ from .dodo_invoice import (
     fetch_payment_invoice_pdf,
     list_payments_for_subscription,
     retrieve_payment,
+    retrieve_product,
+    retrieve_subscription,
 )
+from .invoice_storage import cache_invoice, is_b2_enabled
 from .models import PLAN_LIMITS, Subscription
 from .subscription_utils import is_internal_email
+from .zero_invoice import render_zero_invoice_pdf
 
 
 def _dodo_opposite_mode_hint() -> str:
@@ -348,17 +352,47 @@ class DownloadInvoiceView(APIView):
             )
 
         pdf, err = fetch_payment_invoice_pdf(payment_id)
+
+        # Dodo only generates invoice PDFs for non-zero payments. When it
+        # 404s, check if this is a $0 payment (almost always: a 100%-off
+        # promo). If so, generate a Signalor-branded invoice locally so the
+        # customer still has a receipt that itemises the discount.
+        if not pdf and err == "upstream_404":
+            payment_obj, _ = retrieve_payment(payment_id)
+            if payment_obj and (payment_obj.get("total_amount") or 0) == 0:
+                # Look up the product so the invoice can show the listed price
+                # (and the discount math that brings it to zero). For
+                # subscription payments, product_cart is None — fall back to
+                # the subscription's product_id.
+                product = None
+                product_lookup_id = ""
+                cart = payment_obj.get("product_cart") or []
+                if isinstance(cart, list) and cart:
+                    product_lookup_id = (cart[0] or {}).get("product_id") or ""
+                if not product_lookup_id and payment_obj.get("subscription_id"):
+                    sub_obj, _ = retrieve_subscription(payment_obj["subscription_id"])
+                    if sub_obj:
+                        product_lookup_id = sub_obj.get("product_id") or ""
+                if product_lookup_id:
+                    product, _ = retrieve_product(product_lookup_id)
+                pdf = render_zero_invoice_pdf(payment_obj, product)
+                if pdf and is_b2_enabled():
+                    cache_invoice(payment_id, pdf)
+
         if not pdf:
             logger.warning("Invoice download failed for %s payment_id=%s: %s", email, payment_id, err)
-            # Surface the upstream tag so the billing UI / debugging doesn't
-            # need Render logs to tell apart 401 (key/mode mismatch),
-            # 404 (payment not in this Dodo account), 5xx (Dodo flaky), etc.
+            # 404 from Dodo usually means a payment that never existed —
+            # semantically NOT a gateway error, so return 404 to avoid
+            # Cloudflare wrapping it in its own 502 page. Other upstream tags
+            # (network_error, upstream_5xx, not_configured) are genuine infra
+            # failures → 502.
+            http_status = status.HTTP_404_NOT_FOUND if err == "upstream_404" else status.HTTP_502_BAD_GATEWAY
             return Response(
                 {
                     "error": "Could not retrieve invoice from payment provider.",
                     "upstream": err or "unknown",
                 },
-                status=status.HTTP_502_BAD_GATEWAY,
+                status=http_status,
             )
 
         safe_name = payment_id.replace("/", "_")[:80]
