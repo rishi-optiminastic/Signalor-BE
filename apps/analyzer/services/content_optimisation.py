@@ -13,6 +13,7 @@ Reuses, never duplicates:
 - apps/analyzer/auto_fix.py: _send_to_plugin, _call_llm, _normalize_plugin_status
 - apps/analyzer/integration_resolve.py: resolve_store_integration_for_run
 """
+
 from __future__ import annotations
 
 import base64
@@ -24,6 +25,7 @@ import re
 from urllib.parse import urlparse
 
 import requests
+from django.utils import timezone
 
 from apps.analyzer.auto_fix import (
     _call_llm,
@@ -37,7 +39,6 @@ from apps.analyzer.models import (
     SitemapAudit,
     SitemapAuditPage,
 )
-from django.utils import timezone
 
 logger = logging.getLogger("apps")
 
@@ -50,8 +51,8 @@ ALL_FIELDS = (FIELD_TITLE, FIELD_META, FIELD_BODY, FIELD_SCHEMA)
 
 # Plugin fix_type per editor field
 _FIELD_TO_FIX_TYPE = {
-    FIELD_TITLE: "meta",   # meta fix takes seo_title
-    FIELD_META: "meta",    # same — packed together
+    FIELD_TITLE: "meta",  # meta fix takes seo_title
+    FIELD_META: "meta",  # same — packed together
     FIELD_BODY: "content",
     FIELD_SCHEMA: "schema",
 }
@@ -63,21 +64,17 @@ class ContentOptimisationError(Exception):
 
 # ── Page list ────────────────────────────────────────────────────────────
 
+
 def list_pages_for_run(run: AnalysisRun) -> list[dict]:
     """Return [{url, path, title, last_audited_at}] for the run.
 
     Priority: SitemapAudit pages > root URL only. We don't run a fresh crawl
     here — that's an explicit user action via the Sitemap audit panel.
     """
-    audit = (
-        SitemapAudit.objects.filter(analysis_run=run)
-        .order_by("-id")
-        .first()
-    )
+    audit = SitemapAudit.objects.filter(analysis_run=run).order_by("-id").first()
     if audit:
         rows = (
-            SitemapAuditPage.objects
-            .filter(audit=audit)
+            SitemapAuditPage.objects.filter(audit=audit)
             .exclude(state=SitemapAuditPage.State.FAILED)
             .order_by("path", "url")
             .values("url", "path", "title")
@@ -108,6 +105,7 @@ def list_pages_for_run(run: AnalysisRun) -> list[dict]:
 
 # ── Field fetch ──────────────────────────────────────────────────────────
 
+
 def fetch_page_fields(run: AnalysisRun, url: str) -> dict:
     """Return editable fields for one page.
 
@@ -121,11 +119,7 @@ def fetch_page_fields(run: AnalysisRun, url: str) -> dict:
     if not url:
         raise ContentOptimisationError("url is required")
 
-    integration = (
-        resolve_store_integration_for_run(run.organization, url)
-        if run.organization_id
-        else None
-    )
+    integration = resolve_store_integration_for_run(run.organization, url) if run.organization_id else None
 
     public_html, public_text = _fetch_public_html(url)
     fields = _extract_fields_from_html(public_html, url)
@@ -139,7 +133,29 @@ def fetch_page_fields(run: AnalysisRun, url: str) -> dict:
             fields["title"] = plugin_title
 
     fields["url"] = url
-    render = _capture_page_render(url)
+    # Resolve the storefront password using the same fallback chain as the
+    # analyzer's crawler (apps/analyzer/tasks.py): prefer the connected
+    # Shopify Integration's metadata (where the onboarding form stores it),
+    # fall back to the AnalysisRun field. Without this, password-protected
+    # / unlaunched Shopify stores screenshot the gate instead of the store.
+    storefront_password = ""
+    if run.organization_id:
+        try:
+            from apps.integrations.models import Integration
+
+            shop_integration = Integration.objects.filter(
+                organization_id=run.organization_id,
+                is_active=True,
+                provider__in=["shopify", "wordpress"],
+            ).first()
+            if shop_integration and isinstance(shop_integration.metadata, dict):
+                storefront_password = shop_integration.metadata.get("storefront_password", "") or ""
+        except Exception:
+            pass
+    if not storefront_password:
+        storefront_password = getattr(run, "storefront_password", "") or ""
+
+    render = _capture_page_render(url, storefront_password=storefront_password)
     fields["preview_image"] = render["image"]
     fields["preview_elements"] = render["elements"]
     fields["preview_viewport_width"] = render["viewport_width"]
@@ -237,10 +253,7 @@ _SCREENSHOT_TIMEOUT_MS = 25000
 # Tags worth letting the user click on. We deliberately exclude container
 # tags (div, section, main) — too many overlapping bboxes makes the picker
 # unusable. Text-bearing leaf elements only.
-_PICKABLE_SELECTOR = (
-    "h1,h2,h3,h4,h5,h6,p,li,blockquote,figcaption,"
-    "button,a,span[role='button']"
-)
+_PICKABLE_SELECTOR = "h1,h2,h3,h4,h5,h6,p,li,blockquote,figcaption,button,a,span[role='button']"
 
 # Run inside the page after navigation. Returns a list of element bboxes.
 # Coordinates are in CSS pixels relative to (0,0) at the document top, which
@@ -276,13 +289,17 @@ _COLLECT_ELEMENTS_JS = """
 """
 
 
-def _capture_page_render(url: str) -> dict:
+def _capture_page_render(url: str, storefront_password: str = "") -> dict:
     """Render the page in headless Chromium. Returns:
         {
             image: data-URL JPEG (full-page screenshot),
             elements: [{id, tag, text, bbox: {x,y,w,h}}],  # text-bearing leaves
             viewport_width: int,                           # CSS px width of the image
         }
+
+    If ``storefront_password`` is provided and the page is an unlaunched
+    Shopify storefront, the password gate is submitted before screenshotting
+    so the caller sees the real store, not the gate.
 
     Returns empty fields on any failure — caller falls back gracefully.
     """
@@ -307,6 +324,24 @@ def _capture_page_render(url: str) -> dict:
                 )
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=_SCREENSHOT_TIMEOUT_MS)
+
+                # Shopify unlaunched-store gate: if the URL contains
+                # `/password` or there's a visible password form, submit
+                # the stored password and wait for redirect to the real
+                # storefront. Doing this here (instead of inside the
+                # crawler) so screenshots match what real visitors see
+                # once they pass the gate.
+                if storefront_password:
+                    try:
+                        if page.locator('form[action*="password"]').count() > 0 or "/password" in page.url:
+                            password_input = page.locator('input[name="password"]').first
+                            if password_input.is_visible(timeout=1500):
+                                password_input.fill(storefront_password)
+                                # Submit via Enter (works regardless of button selector drift).
+                                password_input.press("Enter")
+                                page.wait_for_load_state("domcontentloaded", timeout=8000)
+                    except Exception as gate_exc:
+                        logger.info("storefront password submit skipped: %s", gate_exc)
                 # Wait for the network to quiet down so JS-rendered cards and
                 # lazy-loaded hero images have a chance to appear. Fall back to
                 # a short fixed wait if networkidle never fires (some sites with
@@ -339,10 +374,7 @@ def _capture_page_render(url: str) -> dict:
             finally:
                 browser.close()
 
-        elements = [
-            {"id": idx, **el}
-            for idx, el in enumerate(raw_elements or [])
-        ]
+        elements = [{"id": idx, **el} for idx, el in enumerate(raw_elements or [])]
         return {
             "image": f"data:image/jpeg;base64,{base64.b64encode(png).decode('ascii')}",
             "elements": elements,
@@ -503,9 +535,9 @@ def _parse_suggestions_json(raw: str) -> list[dict]:
 
 def list_active_suggestions(run: AnalysisRun, url: str) -> list[ContentSuggestion]:
     return list(
-        ContentSuggestion.objects
-        .filter(analysis_run=run, url=url, status=ContentSuggestion.PROPOSED)
-        .order_by("-created_at")
+        ContentSuggestion.objects.filter(
+            analysis_run=run, url=url, status=ContentSuggestion.PROPOSED
+        ).order_by("-created_at")
     )
 
 
@@ -522,6 +554,7 @@ def dismiss_suggestion(run: AnalysisRun, suggestion_id: int) -> ContentSuggestio
 
 # ── Save (push to plugin) ────────────────────────────────────────────────
 
+
 def save_page_edits(run: AnalysisRun, url: str, edits: dict[str, str]) -> dict:
     """Push the edited fields to the connected plugin.
 
@@ -533,11 +566,7 @@ def save_page_edits(run: AnalysisRun, url: str, edits: dict[str, str]) -> dict:
         plugin_responses: {field: response_dict},
       }
     """
-    integration = (
-        resolve_store_integration_for_run(run.organization, url)
-        if run.organization_id
-        else None
-    )
+    integration = resolve_store_integration_for_run(run.organization, url) if run.organization_id else None
     if not integration:
         raise ContentOptimisationError(
             "No active WordPress or Shopify integration. Connect one in Settings → Integrations."
@@ -551,14 +580,14 @@ def save_page_edits(run: AnalysisRun, url: str, edits: dict[str, str]) -> dict:
     title = edits.get(FIELD_TITLE)
     meta = edits.get(FIELD_META)
     if title is not None or meta is not None:
-        meta_payload = json.dumps({
-            "seo_title": title or "",
-            "seo_description": meta or "",
-        })
+        meta_payload = json.dumps(
+            {
+                "seo_title": title or "",
+                "seo_description": meta or "",
+            }
+        )
         result = _push_one(run, integration, url, "meta", meta_payload)
-        applied_fields = [
-            f for f in (FIELD_TITLE, FIELD_META) if edits.get(f) is not None
-        ]
+        applied_fields = [f for f in (FIELD_TITLE, FIELD_META) if edits.get(f) is not None]
         if result.get("normalized_status") == "success":
             saved.extend(applied_fields)
         else:
@@ -636,10 +665,7 @@ def rewrite_element_text(tag: str, text: str, instruction: str = "") -> str:
     text = (text or "").strip()
     if not text:
         return ""
-    instruction_block = (
-        f"INSTRUCTION FROM USER: {instruction.strip()}\n"
-        if instruction.strip() else ""
-    )
+    instruction_block = f"INSTRUCTION FROM USER: {instruction.strip()}\n" if instruction.strip() else ""
     prompt = _REWRITE_ELEMENT_PROMPT.format(
         tag=tag or "p",
         text=text,
@@ -676,17 +702,60 @@ def apply_element_edit(
 
     fields = fetch_page_fields(run, url)
     body_html = fields.get("body_html") or ""
-    if not body_html:
-        raise ContentOptimisationError("Page has no editable body content.")
 
-    new_body, replaced = _replace_first_text_in_html(body_html, original_text, new_text)
-    if not replaced:
-        raise ContentOptimisationError(
-            "Couldn't locate that text in the page body — it may be rendered by JavaScript "
-            "and not present in the HTML the plugin sees. Try editing via Generate suggestions."
-        )
+    # Try the Pages-API path first — fast, no Shopify Asset round-trip.
+    if body_html:
+        new_body, replaced = _replace_first_text_in_html(body_html, original_text, new_text)
+        if replaced:
+            return save_page_edits(run, url, {FIELD_BODY: new_body})
 
-    return save_page_edits(run, url, {FIELD_BODY: new_body})
+    # Fall back to Shopify theme-asset edit. Most homepage / hero / nav /
+    # footer text lives in sections/*.json, not in any Page body_html. The
+    # connected Signalor Shopify Integration has write_themes scope so we
+    # can update those files directly via the Asset API.
+    if run.organization_id:
+        try:
+            from apps.integrations.models import Integration
+            from apps.integrations.services.shopify_theme import (
+                ThemeEditError,
+                find_and_replace_text,
+            )
+
+            shop_integration = Integration.objects.filter(
+                organization_id=run.organization_id,
+                provider=Integration.Provider.SHOPIFY,
+                is_active=True,
+            ).first()
+            if shop_integration:
+                try:
+                    result = find_and_replace_text(shop_integration, original_text, new_text, url=url)
+                except ThemeEditError as exc:
+                    raise ContentOptimisationError(str(exc)) from exc
+                if result.get("ok"):
+                    # Match the canonical save_page_edits return shape so the
+                    # FE's Zod schema parses it. `body_html` is used as the
+                    # placeholder field-name (closest semantic equivalent for
+                    # "page body content was changed"); the real provenance
+                    # of the edit goes into plugin_responses for debugging.
+                    return {
+                        "saved": ["body_html"],
+                        "failed": [],
+                        "plugin_responses": {
+                            "type": "theme_asset",
+                            "asset_key": result["asset_key"],
+                            "preview": result.get("preview", ""),
+                        },
+                    }
+        except ContentOptimisationError:
+            raise
+        except Exception:
+            logger.exception("shopify_theme fallback failed")
+
+    raise ContentOptimisationError(
+        "Couldn't locate that text in the page body or in your theme. "
+        "It may be rendered by JavaScript or come from translation strings. "
+        "Try editing via Generate suggestions."
+    )
 
 
 def _replace_first_text_in_html(html: str, needle: str, replacement: str) -> tuple[str, bool]:
@@ -713,6 +782,7 @@ def _replace_first_text_in_html(html: str, needle: str, replacement: str) -> tup
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
+
 
 def _path_of(url: str) -> str:
     try:

@@ -31,7 +31,7 @@ from .dodo_invoice import (
     retrieve_payment,
 )
 from .invoice_pdf import resolve_invoice_pdf
-from .models import PLAN_LIMITS, Subscription
+from .models import PLAN_LIMITS, InvoiceRecord, Subscription
 from .subscription_utils import is_internal_email
 
 
@@ -393,9 +393,12 @@ def _shape_payment_row(p: dict) -> dict:
 
 
 class InvoiceListView(APIView):
-    """GET /api/payments/invoices/?email= — list every Dodo payment for the
-    user's subscription, newest first. Source of truth is Dodo; we don't
-    cache the list locally because amounts/statuses can change (refunds).
+    """GET /api/payments/invoices/?email= — full invoice history.
+
+    Strategy: prefer the local InvoiceRecord table (populated by the webhook
+    on every successful payment going forward). Fall back to Dodo API for
+    legacy users whose payments predate the InvoiceRecord table — those
+    will progressively move to local storage as renewals fire.
     """
 
     permission_classes = [AllowAny]
@@ -407,6 +410,22 @@ class InvoiceListView(APIView):
 
         if is_internal_email(email):
             return Response({"items": []})
+
+        # Prefer local table — no upstream call, includes $0 / discounted rows.
+        local_rows = InvoiceRecord.objects.filter(email=email).order_by("-created_at")
+        if local_rows.exists():
+            items = [
+                {
+                    "payment_id": r.payment_id,
+                    "created_at": r.created_at.isoformat(),
+                    "amount": float(r.amount) if r.amount is not None else None,
+                    "currency": r.currency,
+                    "status": r.status,
+                    "plan": r.plan,
+                }
+                for r in local_rows
+            ]
+            return Response({"items": items})
 
         try:
             sub = Subscription.objects.get(email=email)
@@ -571,6 +590,7 @@ class DodoWebhookView(APIView):
             ]
         )
         self._store_latest_payment_id(data, sub)
+        self._save_invoice_record(data, sub)
         logger.info("Subscription activated for %s (plan=%s)", email, sub.plan)
 
         # Post-payment email sequence (payment-success → invoice → welcome).
@@ -616,6 +636,7 @@ class DodoWebhookView(APIView):
 
         sub.save(update_fields=["status", "current_period_end"])
         self._store_latest_payment_id(data, sub)
+        self._save_invoice_record(data, sub)
         logger.info("Subscription renewed for %s", sub.email)
 
         # Renewal: fire the same 3-email sequence with is_renewal=True so
@@ -725,6 +746,7 @@ class DodoWebhookView(APIView):
 
         if sub:
             self._store_latest_payment_id(data, sub)
+            self._save_invoice_record(data, sub)
 
         if sub and sub.status != "active":
             sub.status = "active"
@@ -827,6 +849,36 @@ class DodoWebhookView(APIView):
                 logger.exception("Invoice pre-warm crashed for %s", payment_id)
 
         threading.Thread(target=_run, daemon=True, name=f"invoice-prewarm-{payment_id[:12]}").start()
+
+    def _save_invoice_record(self, data, sub):
+        """Persist one InvoiceRecord row per successful payment for history.
+
+        Idempotent on payment_id via unique constraint + get_or_create —
+        retried webhooks won't create duplicates.
+        """
+        from decimal import Decimal
+
+        if not sub:
+            return
+        pid = extract_payment_id_from_webhook(data)
+        if not pid:
+            return
+        amount_raw = data.get("total_amount") or data.get("amount")
+        try:
+            amount = Decimal(str(amount_raw)) / 100 if amount_raw is not None else None
+        except Exception:
+            amount = None
+        currency = (data.get("currency") or sub.currency or "usd").lower()
+        InvoiceRecord.objects.get_or_create(
+            payment_id=pid,
+            defaults={
+                "email": sub.email,
+                "amount": amount,
+                "currency": currency,
+                "status": "succeeded",
+                "plan": sub.plan,
+            },
+        )
 
     def _record_partner_commission(self, email, data):
         """Look up affiliate attribution and stage a PENDING commission row.

@@ -5,14 +5,14 @@ import logging
 import os
 import secrets
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-import requests
 
+import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.http import HttpResponseRedirect
+from google.analytics.admin import AnalyticsAdminServiceClient
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
-from google.analytics.admin import AnalyticsAdminServiceClient
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -23,15 +23,11 @@ from apps.accounts.subscription_utils import (
     plan_limit_error_response_dict,
     project_limit_reached,
 )
-from core.throttling import PollingThrottle
 from apps.organizations.models import Organization
+from core.throttling import PollingThrottle
 
 from .models import (
-    GADataSnapshot,
     Integration,
-    ShopifyDataSnapshot,
-    WooCommerceDataSnapshot,
-    WordPressDataSnapshot,
 )
 from .serializers import (
     GADataSnapshotSerializer,
@@ -41,7 +37,6 @@ from .serializers import (
     ShopifyDataSnapshotSerializer,
     WooCommerceConnectSerializer,
     WooCommerceDataSnapshotSerializer,
-    WordPressConnectSerializer,
     WordPressDataSnapshotSerializer,
 )
 
@@ -70,9 +65,7 @@ def _resolve_shopify_redirect_uri(request) -> str:
     public = os.getenv("SHOPIFY_REDIRECT_URI_PUBLIC", "").strip()
     host = (request.get_host() or "").lower().split(":")[0]
     is_local_req = host in ("localhost", "127.0.0.1")
-    explicit_mentions_local = bool(
-        explicit and ("localhost" in explicit or "127.0.0.1" in explicit)
-    )
+    explicit_mentions_local = bool(explicit and ("localhost" in explicit or "127.0.0.1" in explicit))
 
     def _with_slash(u: str) -> str:
         u = u.strip()
@@ -95,6 +88,7 @@ GA_SCOPES = [
 ]
 
 # ---------- helpers ----------
+
 
 def _get_org_or_400(email):
     """Return the org for this email, auto-creating a default one if needed."""
@@ -157,9 +151,7 @@ def _resolve_org(email: str, org_id: int | None = None):
 def _sign_state(payload: dict) -> str:
     """HMAC-sign a JSON state payload."""
     raw = json.dumps(payload, sort_keys=True)
-    sig = hmac.new(
-        settings.SECRET_KEY.encode(), raw.encode(), hashlib.sha256
-    ).hexdigest()
+    sig = hmac.new(settings.SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
     return json.dumps({"data": payload, "sig": sig})
 
 
@@ -168,9 +160,7 @@ def _verify_state(state_str: str) -> dict | None:
     try:
         state = json.loads(state_str)
         raw = json.dumps(state["data"], sort_keys=True)
-        expected = hmac.new(
-            settings.SECRET_KEY.encode(), raw.encode(), hashlib.sha256
-        ).hexdigest()
+        expected = hmac.new(settings.SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
         if hmac.compare_digest(expected, state["sig"]):
             return state["data"]
     except (json.JSONDecodeError, KeyError, TypeError):
@@ -215,7 +205,11 @@ def _redirect_with_status(
 ):
     """Build a redirect to the frontend with a status query param."""
     frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
-    target = return_to if return_to.startswith("/") and not return_to.startswith("//") else "/settings/integrations"
+    target = (
+        return_to
+        if return_to.startswith("/") and not return_to.startswith("//")
+        else "/settings/integrations"
+    )
     sep = "&" if "?" in target else "?"
     status_q = "connected" if ok else "error"
     url = f"{frontend_base}{target}{sep}{urlencode({provider: status_q, 'reason': reason})}"
@@ -245,9 +239,13 @@ def _refresh_if_needed(integration: Integration, creds: Credentials) -> Credenti
             integration.set_access_token(creds.token)
             if creds.refresh_token:
                 integration.set_refresh_token(creds.refresh_token)
-            integration.save(update_fields=[
-                "access_token_encrypted", "refresh_token_encrypted", "updated_at",
-            ])
+            integration.save(
+                update_fields=[
+                    "access_token_encrypted",
+                    "refresh_token_encrypted",
+                    "updated_at",
+                ]
+            )
         except Exception as exc:
             logger.warning("Token refresh failed: %s", exc)
             raise
@@ -256,8 +254,10 @@ def _refresh_if_needed(integration: Integration, creds: Credentials) -> Credenti
 
 # ---------- OAuth endpoints ----------
 
+
 class GAAuthURLView(APIView):
     """GET /api/integrations/google-analytics/auth-url/?email="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -290,6 +290,7 @@ class GAAuthURLView(APIView):
 
 class GACallbackView(APIView):
     """POST /api/integrations/google-analytics/callback/"""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -362,6 +363,7 @@ class GACallbackView(APIView):
 
 class IntegrationStatusView(APIView):
     """GET /api/integrations/status/?email=&org_id="""
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]  # high-frequency read for dashboard/sidebar state
 
@@ -387,6 +389,7 @@ class IntegrationStatusView(APIView):
 
 class GADisconnectView(APIView):
     """DELETE /api/integrations/google-analytics/disconnect/?email="""
+
     permission_classes = [AllowAny]
 
     def delete(self, request):
@@ -432,8 +435,10 @@ class GADisconnectView(APIView):
 
 # ---------- Property selection ----------
 
+
 class GAPropertiesListView(APIView):
     """GET /api/integrations/google-analytics/properties/?email="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -470,11 +475,13 @@ class GAPropertiesListView(APIView):
             properties = []
             for account in accounts:
                 for prop in account.property_summaries:
-                    properties.append({
-                        "property_id": prop.property.split("/")[-1],
-                        "display_name": prop.display_name,
-                        "account_name": account.display_name,
-                    })
+                    properties.append(
+                        {
+                            "property_id": prop.property.split("/")[-1],
+                            "display_name": prop.display_name,
+                            "account_name": account.display_name,
+                        }
+                    )
 
             return Response({"properties": properties})
 
@@ -488,6 +495,7 @@ class GAPropertiesListView(APIView):
 
 class GASelectPropertyView(APIView):
     """POST /api/integrations/google-analytics/select-property/"""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -518,16 +526,20 @@ class GASelectPropertyView(APIView):
         }
         integration.save(update_fields=["metadata", "updated_at"])
 
-        return Response({
-            "message": "Property selected successfully.",
-            "integration": IntegrationSerializer(integration).data,
-        })
+        return Response(
+            {
+                "message": "Property selected successfully.",
+                "integration": IntegrationSerializer(integration).data,
+            }
+        )
 
 
 # ---------- Data sync ----------
 
+
 class GASyncView(APIView):
     """POST /api/integrations/google-analytics/sync/?email="""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -561,6 +573,7 @@ class GASyncView(APIView):
             )
 
         from .tasks import start_ga4_sync
+
         start_ga4_sync(integration.id)
 
         return Response({"message": "Sync started."}, status=status.HTTP_202_ACCEPTED)
@@ -568,10 +581,12 @@ class GASyncView(APIView):
 
 class GADataView(APIView):
     """GET /api/integrations/google-analytics/data/?email="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
         from datetime import timedelta
+
         from django.utils import timezone
 
         email = request.query_params.get("email", "").lower().strip()
@@ -616,6 +631,7 @@ class GADataView(APIView):
             and not integration.ga_snapshots.filter(sync_status="syncing").exists()
         ):
             from .tasks import start_ga4_sync
+
             start_ga4_sync(integration.id)
 
         serializer = GADataSnapshotSerializer(snapshot)
@@ -625,6 +641,7 @@ class GADataView(APIView):
         if analyzed_url:
             try:
                 from .services.ga4 import fetch_ga4_page_metrics
+
                 payload["page_match"] = fetch_ga4_page_metrics(integration, analyzed_url)
             except Exception as exc:
                 logger.warning("Failed GA page match lookup: %s", exc)
@@ -641,8 +658,10 @@ class GADataView(APIView):
 
 # ---------- Score vs Traffic Correlation ----------
 
+
 class ScoreTrafficCorrelationView(APIView):
     """GET /api/integrations/score-traffic-correlation/?email="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -690,24 +709,30 @@ class ScoreTrafficCorrelationView(APIView):
         for run in runs:
             run_date = run.created_at.strftime("%Y-%m-%d")
             ga_day = ga_daily.get(run_date, {})
-            data_points.append({
-                "date": run_date,
-                "geo_score": round(run.composite_score, 1),
-                "sessions": ga_day.get("sessions", None),
-                "organic_sessions": ga_day.get("organic_sessions", None),
-                "url": run.url,
-            })
+            data_points.append(
+                {
+                    "date": run_date,
+                    "geo_score": round(run.composite_score, 1),
+                    "sessions": ga_day.get("sessions", None),
+                    "organic_sessions": ga_day.get("organic_sessions", None),
+                    "url": run.url,
+                }
+            )
 
-        return Response({
-            "data_points": data_points,
-            "has_ga_data": bool(snapshot),
-        })
+        return Response(
+            {
+                "data_points": data_points,
+                "has_ga_data": bool(snapshot),
+            }
+        )
 
 
 # ---------- Shopify endpoints ----------
 
+
 class ShopifyConnectView(APIView):
     """POST /api/integrations/shopify/connect/"""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -730,9 +755,7 @@ class ShopifyConnectView(APIView):
         from .services.shopify import validate_shopify_connection
 
         try:
-            shop_info = validate_shopify_connection(
-                data["shop_domain"], data["access_token"]
-            )
+            shop_info = validate_shopify_connection(data["shop_domain"], data["access_token"])
         except ValueError as e:
             return Response(
                 {"error": str(e)},
@@ -753,14 +776,17 @@ class ShopifyConnectView(APIView):
         integration.save()
         _deactivate_other_store_integration(org, Integration.Provider.SHOPIFY)
 
-        return Response({
-            "message": "Shopify connected successfully.",
-            "integration": IntegrationSerializer(integration).data,
-        })
+        return Response(
+            {
+                "message": "Shopify connected successfully.",
+                "integration": IntegrationSerializer(integration).data,
+            }
+        )
 
 
 class ShopifyAuthURLView(APIView):
     """GET /api/integrations/shopify/auth-url/?email=&shop=&org_id=&return_to="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -839,9 +865,12 @@ class ShopifyAuthURLView(APIView):
             return Response({"auth_url": auth_url})
 
         scope_list = [s.strip() for s in scopes.split(",") if s.strip()]
-        use_install_custom = os.getenv(
-            "SHOPIFY_OAUTH_USE_INSTALL_CUSTOM_APP", ""
-        ).strip().lower() in ("1", "true", "yes", "on")
+        use_install_custom = os.getenv("SHOPIFY_OAUTH_USE_INSTALL_CUSTOM_APP", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         if use_install_custom:
             auth_url = build_shopify_admin_install_custom_app_url(
                 client_id=client_id,
@@ -873,6 +902,7 @@ class ShopifyAuthURLView(APIView):
 
 class ShopifyCallbackView(APIView):
     """GET /api/integrations/shopify/callback/"""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -893,11 +923,29 @@ class ShopifyCallbackView(APIView):
         default_return_to = "/settings/integrations"
 
         def _shopify_redirect(ok: bool, reason: str = "", return_to: str = default_return_to):
-            target = return_to if return_to.startswith("/") and not return_to.startswith("//") else default_return_to
-            sep = "&" if "?" in target else "?"
+            target = (
+                return_to
+                if return_to.startswith("/") and not return_to.startswith("//")
+                else default_return_to
+            )
             status_q = "connected" if ok else "error"
-            url = f"{frontend_base}{target}{sep}{urlencode({'shopify': status_q, 'reason': reason})}"
-            return HttpResponseRedirect(url)
+            # Replace any existing shopify/reason keys instead of appending —
+            # the FE-supplied return_to may already carry `shopify=installed`
+            # (the in-progress install flag), and naive appending produces
+            # ?shopify=installed&shopify=connected which the FE treats as a
+            # bad URL.
+            parts = urlparse(target)
+            pairs = [
+                (k, v)
+                for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                if k not in ("shopify", "reason")
+            ]
+            pairs.append(("shopify", status_q))
+            pairs.append(("reason", reason))
+            target_rewritten = urlunparse(
+                (parts.scheme, parts.netloc, parts.path, parts.params, urlencode(pairs), parts.fragment)
+            )
+            return HttpResponseRedirect(f"{frontend_base}{target_rewritten}")
 
         if not shop or not code or not state_str:
             return _shopify_redirect(False, "missing_params")
@@ -1006,15 +1054,9 @@ class ShopifyCallbackView(APIView):
                     logger.warning("Session sync to Shopify app failed (non-fatal): %s", sync_exc)
 
             # Keep org URL in sync for GEO analysis auto-start
-            primary_domain = (
-                shop_info.get("domain")
-                or shop_info.get("myshopify_domain")
-                or shop_domain
-            )
+            primary_domain = shop_info.get("domain") or shop_info.get("myshopify_domain") or shop_domain
             store_url = (
-                primary_domain
-                if str(primary_domain).startswith("http")
-                else f"https://{primary_domain}"
+                primary_domain if str(primary_domain).startswith("http") else f"https://{primary_domain}"
             )
             if org.url != store_url:
                 org.url = store_url
@@ -1024,9 +1066,7 @@ class ShopifyCallbackView(APIView):
             webhook_url = os.getenv("SHOPIFY_APP_UNINSTALLED_WEBHOOK_URL", "").strip()
             if webhook_url:
                 try:
-                    register_app_uninstalled_webhook(
-                        shop_domain, access_token, webhook_url
-                    )
+                    register_app_uninstalled_webhook(shop_domain, access_token, webhook_url)
                 except Exception as webhook_exc:
                     logger.warning(
                         "Shopify app/uninstalled webhook skipped (non-fatal): %s",
@@ -1045,7 +1085,7 @@ class ShopifyCallbackView(APIView):
             logger.warning("Shopify OAuth validation: %s", exc)
             return _shopify_redirect(False, reason, return_to=return_to)
 
-        except Exception as exc:
+        except Exception:
             logger.exception("Shopify callback failed")
             return _shopify_redirect(False, "callback_failed", return_to=return_to)
 
@@ -1070,6 +1110,7 @@ class ShopifyBillingUpdateView(APIView):
     plan      Starter | Pro | Max
     status    ACTIVE | PENDING | ACCEPTED | DECLINED | EXPIRED | FROZEN | CANCELLED
     """
+
     permission_classes = [AllowAny]
 
     # Shopify plan id (sent by the Shopify app) → Signalor Subscription.Plan value
@@ -1092,6 +1133,7 @@ class ShopifyBillingUpdateView(APIView):
 
     def post(self, request):
         from apps.accounts.models import Subscription
+
         from .services.shopify import normalize_shop_domain
 
         expected_secret = os.getenv("SHOPIFY_APP_WEBHOOK_SECRET", "").strip()
@@ -1114,10 +1156,14 @@ class ShopifyBillingUpdateView(APIView):
 
         # Find the Signalor account by matching the connected Shopify integration.
         shop_domain = normalize_shop_domain(shop_raw)
-        integration = Integration.objects.filter(
-            provider=Integration.Provider.SHOPIFY,
-            metadata__shop_domain=shop_domain,
-        ).select_related("organization").first()
+        integration = (
+            Integration.objects.filter(
+                provider=Integration.Provider.SHOPIFY,
+                metadata__shop_domain=shop_domain,
+            )
+            .select_related("organization")
+            .first()
+        )
 
         if not integration:
             # The merchant approved billing on Shopify but hasn't connected the
@@ -1126,7 +1172,9 @@ class ShopifyBillingUpdateView(APIView):
             # merchant connects/syncs, the entitlement will be reconciled.
             logger.warning(
                 "shopify-billing-update: no integration for shop=%s status=%s plan=%s",
-                shop_domain, status_raw, plan_raw,
+                shop_domain,
+                status_raw,
+                plan_raw,
             )
             return Response({"ok": True, "matched": False})
 
@@ -1134,7 +1182,8 @@ class ShopifyBillingUpdateView(APIView):
         if not owner_email:
             logger.error(
                 "shopify-billing-update: integration org has no owner_email shop=%s org=%s",
-                shop_domain, integration.organization_id,
+                shop_domain,
+                integration.organization_id,
             )
             return Response({"ok": True, "matched": False})
 
@@ -1147,19 +1196,30 @@ class ShopifyBillingUpdateView(APIView):
         # `payment_subscription_id` is normally Dodo's; we prefix to disambiguate.
         sub.payment_customer_id = f"shopify:{shop_domain}"
         sub.currency = "usd"  # Shopify billing config is USD; can be widened later
-        sub.save(update_fields=[
-            "plan", "status", "payment_customer_id", "currency", "updated_at",
-        ])
+        sub.save(
+            update_fields=[
+                "plan",
+                "status",
+                "payment_customer_id",
+                "currency",
+                "updated_at",
+            ]
+        )
 
         logger.info(
             "shopify-billing-update: shop=%s email=%s plan=%s status=%s (was_new=%s)",
-            shop_domain, owner_email, sub.plan, sub.status, created,
+            shop_domain,
+            owner_email,
+            sub.plan,
+            sub.status,
+            created,
         )
         return Response({"ok": True, "email": owner_email, "plan": sub.plan, "status": sub.status})
 
 
 class ShopifyAppUninstalledWebhookView(APIView):
     """POST /api/integrations/shopify/webhooks/app-uninstalled/"""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1189,6 +1249,7 @@ class ShopifyAppUninstalledWebhookView(APIView):
 
 class ShopifyDisconnectView(APIView):
     """DELETE /api/integrations/shopify/disconnect/?email=&org_id="""
+
     permission_classes = [AllowAny]
 
     def delete(self, request):
@@ -1225,6 +1286,7 @@ class ShopifyDisconnectView(APIView):
 
 class ShopifySyncView(APIView):
     """POST /api/integrations/shopify/sync/?email=&org_id="""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1255,6 +1317,7 @@ class ShopifySyncView(APIView):
             )
 
         from .tasks import start_shopify_sync
+
         start_shopify_sync(integration.id)
 
         return Response({"message": "Sync started."}, status=status.HTTP_202_ACCEPTED)
@@ -1262,10 +1325,12 @@ class ShopifySyncView(APIView):
 
 class ShopifyDataView(APIView):
     """GET /api/integrations/shopify/data/?email=&org_id="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
         from datetime import timedelta
+
         from django.utils import timezone
 
         email = request.query_params.get("email", "").lower().strip()
@@ -1328,6 +1393,7 @@ class ShopifyLinkAppView(APIView):
 
     Body: { "shop_domain": "store.myshopify.com", "app_url": "https://...", "hmac_secret": "..." }
     """
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1361,11 +1427,13 @@ class ShopifyLinkAppView(APIView):
         integration.metadata = meta
         integration.save(update_fields=["metadata"])
 
-        return Response({
-            "status": "linked",
-            "shop_domain": shop_domain,
-            "message": "Shopify app linked. Fix instructions will now be routed through the app.",
-        })
+        return Response(
+            {
+                "status": "linked",
+                "shop_domain": shop_domain,
+                "message": "Shopify app linked. Fix instructions will now be routed through the app.",
+            }
+        )
 
 
 class WordPressConnectView(APIView):
@@ -1422,11 +1490,13 @@ class WordPressConnectView(APIView):
                     org.url = site_info["site_url"]
                     org.save(update_fields=["url"])
 
-                return Response({
-                    "status": "connected",
-                    "site_name": site_info["site_name"],
-                    "message": f"Connected to {site_info['site_name']} via Application Password.",
-                })
+                return Response(
+                    {
+                        "status": "connected",
+                        "site_name": site_info["site_name"],
+                        "message": f"Connected to {site_info['site_name']} via Application Password.",
+                    }
+                )
             else:
                 # Legacy: Signalor plugin path (no username provided)
                 verify_url = f"{site_url.rstrip('/')}/wp-json/signalor/v1/status"
@@ -1438,13 +1508,17 @@ class WordPressConnectView(APIView):
                     )
                     if not resp.ok:
                         return Response(
-                            {"error": f"Could not connect to plugin (HTTP {resp.status_code}). Check your site URL and API key."},
+                            {
+                                "error": f"Could not connect to plugin (HTTP {resp.status_code}). Check your site URL and API key."
+                            },
                             status=status.HTTP_400_BAD_REQUEST,
                         )
                     plugin_data = resp.json()
                 except requests.RequestException as exc:
                     return Response(
-                        {"error": f"Could not reach your site: {exc}. Make sure the Signalor GEO plugin is installed and active."},
+                        {
+                            "error": f"Could not reach your site: {exc}. Make sure the Signalor GEO plugin is installed and active."
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -1466,11 +1540,13 @@ class WordPressConnectView(APIView):
                     org.url = site_url
                     org.save(update_fields=["url"])
 
-                return Response({
-                    "status": "connected",
-                    "site_name": plugin_data.get("name", ""),
-                    "message": f"Connected to {plugin_data.get('name', site_url)} via Signalor plugin.",
-                })
+                return Response(
+                    {
+                        "status": "connected",
+                        "site_name": plugin_data.get("name", ""),
+                        "message": f"Connected to {plugin_data.get('name', site_url)} via Signalor plugin.",
+                    }
+                )
 
         # ── WordPress.com OAuth flow ──
         client_id = os.getenv("WPCOM_CLIENT_ID", "").strip()
@@ -1501,10 +1577,12 @@ class WordPressConnectView(APIView):
                 "state": _sign_state(state_payload),
             }
         )
-        return Response({
-            "oauth_url": auth_url,
-            "message": "Redirect to WordPress.com to complete OAuth.",
-        })
+        return Response(
+            {
+                "oauth_url": auth_url,
+                "message": "Redirect to WordPress.com to complete OAuth.",
+            }
+        )
 
     def get(self, request):
         return self._connect(request)
@@ -1644,6 +1722,7 @@ class WordPressCallbackView(APIView):
 
 class WordPressDisconnectView(APIView):
     """DELETE /api/integrations/wordpress/disconnect/?email="""
+
     permission_classes = [AllowAny]
 
     def delete(self, request):
@@ -1677,6 +1756,7 @@ class WordPressDisconnectView(APIView):
 
 class WordPressSyncView(APIView):
     """POST /api/integrations/wordpress/sync/?email="""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1711,10 +1791,12 @@ class WordPressSyncView(APIView):
 
 class WordPressDataView(APIView):
     """GET /api/integrations/wordpress/data/?email="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
         from datetime import timedelta
+
         from django.utils import timezone
 
         email = request.query_params.get("email", "").lower().strip()
@@ -1768,8 +1850,10 @@ class WordPressDataView(APIView):
 # WooCommerce
 # ─────────────────────────────────────────────────────────────
 
+
 class WooCommerceConnectView(APIView):
     """POST /api/integrations/woocommerce/connect/"""
+
     permission_classes = [AllowAny]
 
     def _connect(self, payload):
@@ -1809,10 +1893,12 @@ class WooCommerceConnectView(APIView):
         }
         integration.save()
 
-        return Response({
-            "message": "WooCommerce connected successfully.",
-            "integration": IntegrationSerializer(integration).data,
-        })
+        return Response(
+            {
+                "message": "WooCommerce connected successfully.",
+                "integration": IntegrationSerializer(integration).data,
+            }
+        )
 
     def post(self, request):
         return self._connect(request.data)
@@ -1824,6 +1910,7 @@ class WooCommerceConnectView(APIView):
 
 class WooCommerceDisconnectView(APIView):
     """DELETE /api/integrations/woocommerce/disconnect/?email=&org_id="""
+
     permission_classes = [AllowAny]
 
     def delete(self, request):
@@ -1851,6 +1938,7 @@ class WooCommerceDisconnectView(APIView):
 
 class WooCommerceSyncView(APIView):
     """POST /api/integrations/woocommerce/sync/?email=&org_id="""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1875,6 +1963,7 @@ class WooCommerceSyncView(APIView):
             return Response({"error": "WooCommerce not connected."}, status=status.HTTP_404_NOT_FOUND)
 
         from .tasks import start_woocommerce_sync
+
         start_woocommerce_sync(integration.id)
 
         return Response({"message": "WooCommerce sync started."})
@@ -1882,10 +1971,12 @@ class WooCommerceSyncView(APIView):
 
 class WooCommerceDataView(APIView):
     """GET /api/integrations/woocommerce/data/?email=&org_id="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
         from datetime import timedelta
+
         from django.utils import timezone
 
         email = request.query_params.get("email", "").lower().strip()
@@ -1926,6 +2017,7 @@ class WooCommerceDataView(APIView):
             and not integration.woocommerce_snapshots.filter(sync_status="syncing").exists()
         ):
             from .tasks import start_woocommerce_sync
+
             start_woocommerce_sync(integration.id)
 
         serializer = WooCommerceDataSnapshotSerializer(snapshot)

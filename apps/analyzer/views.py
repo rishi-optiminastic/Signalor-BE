@@ -1,5 +1,5 @@
-import logging
 import json
+import logging
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
@@ -13,14 +13,6 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.throttling import (
-    AiChatThrottle,
-    AuditStartThrottle,
-    DataForSEOThrottle,
-    ExpensiveThrottle,
-    PollingThrottle,
-)
-
 from apps.accounts.subscription_utils import (
     analysis_allowed_for_email,
     get_plan_limits,
@@ -31,46 +23,49 @@ from apps.accounts.subscription_utils import (
 )
 from apps.integrations.models import Integration
 from apps.organizations.models import Organization
+from core.throttling import (
+    AiChatThrottle,
+    AuditStartThrottle,
+    DataForSEOThrottle,
+    ExpensiveThrottle,
+    PollingThrottle,
+)
 
 from .models import (
+    ACHIEVEMENTS_INFO,
+    ACTION_TEMPLATES,
     AnalysisRun,
+    BlogAutomationConfig,
+    BlogAutomationJob,
     Competitor,
     GeoImprovement,
+    PromptResult,
+    PromptTrack,
     Recommendation,
     UserAction,
     UserGamification,
-    BlogAutomationConfig,
-    BlogAutomationJob,
-    PromptTrack,
-    PromptResult,
-    ACHIEVEMENTS_INFO,
-    ACTION_TEMPLATES,
 )
 from .serializers import (
+    AddPromptSerializer,
+    AiRecommendationSummarySerializer,
     AnalysisRunDetailSerializer,
     AnalysisRunListSerializer,
-    StartAnalysisSerializer,
-    UserActionSerializer,
-    UserGamificationSerializer,
-    CreateUserActionSerializer,
-    UpdateUserActionSerializer,
-    ActionTemplateSerializer,
-    ActionStatsSerializer,
     BlogAutomationConfigSerializer,
     BlogAutomationJobSerializer,
-    PromptTrackSerializer,
-    AddPromptSerializer,
-    ShareOfVoiceSerializer,
     CitationTrendPointSerializer,
-    AiRecommendationSummarySerializer,
+    CreateUserActionSerializer,
+    PromptTrackSerializer,
+    ShareOfVoiceSerializer,
+    StartAnalysisSerializer,
+    UpdateUserActionSerializer,
+    UserActionSerializer,
+    UserGamificationSerializer,
 )
 from .tasks import start_analysis_task
 
 logger = logging.getLogger("apps")
 
-CRAWL_CHECK_USER_AGENT = (
-    "SignalorBot/1.0 (+https://signalor.ai; crawl-essentials-check)"
-)
+CRAWL_CHECK_USER_AGENT = "SignalorBot/1.0 (+https://signalor.ai; crawl-essentials-check)"
 
 
 def _safe_first(queryset, context: str = "query"):
@@ -400,7 +395,7 @@ def _to_html_from_markdownish(text: str) -> str:
         return "<p></p>"
     html_chunks = []
     for chunk in chunks:
-        chunk_html = chunk.replace('\n', '<br/>')
+        chunk_html = chunk.replace("\n", "<br/>")
         html_chunks.append(f"<p>{chunk_html}</p>")
     return "".join(html_chunks)
 
@@ -427,7 +422,8 @@ def _get_or_create_blog_config(
     )
     run = (
         _safe_first(AnalysisRun.objects.filter(pk=run_id), context="blog config run lookup")
-        if run_id else None
+        if run_id
+        else None
     )
 
     config = _safe_first(
@@ -550,10 +546,17 @@ def _publish_blog_job(job: BlogAutomationJob, publish_now: bool = True) -> dict:
     job.published_at = timezone.now() if publish_now else None
     job.status = BlogAutomationJob.Status.PUBLISHED if publish_now else BlogAutomationJob.Status.DRAFT
     job.error_message = ""
-    job.save(update_fields=[
-        "provider", "external_post_id", "external_post_url",
-        "published_at", "status", "error_message", "updated_at",
-    ])
+    job.save(
+        update_fields=[
+            "provider",
+            "external_post_id",
+            "external_post_url",
+            "published_at",
+            "status",
+            "error_message",
+            "updated_at",
+        ]
+    )
     return published
 
 
@@ -572,9 +575,7 @@ def _process_due_blog_jobs(config: BlogAutomationConfig, limit: int = 20) -> int
         if job.analysis_run_id:
             try:
                 run = AnalysisRun.objects.get(pk=job.analysis_run_id)
-                recommendation_titles = list(
-                    run.recommendations.values_list("title", flat=True)[:8]
-                )
+                recommendation_titles = list(run.recommendations.values_list("title", flat=True)[:8])
             except Exception:
                 recommendation_titles = []
 
@@ -611,12 +612,11 @@ def _process_due_blog_jobs(config: BlogAutomationConfig, limit: int = 20) -> int
 
 class HealthCheckView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [PollingThrottle]  
+    throttle_classes = [PollingThrottle]
 
     def get(self, request):
         from django.db import connection
-        from django.conf import settings
-        
+
         health_status = {
             "status": "healthy",
             "service": "geo-be",
@@ -632,13 +632,15 @@ class HealthCheckView(APIView):
             return Response(health_status, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         try:
             from django.core.cache import cache
+
             cache.set("health_check", "ok", 10)
             cache_value = cache.get("health_check")
             health_status["cache"] = "connected" if cache_value == "ok" else "degraded"
         except Exception as e:
             health_status["cache"] = f"error: {str(e)}"
-        
+
         return Response(health_status, status=status.HTTP_200_OK)
+
 
 class StartAnalysisView(APIView):
     permission_classes = [AllowAny]
@@ -748,11 +750,10 @@ class AnalysisRunBySlugView(APIView):
     def get(self, request, slug):
         try:
             run = (
-                AnalysisRun.objects
-                .select_related("brand_visibility", "organization")
+                AnalysisRun.objects.select_related("brand_visibility", "organization")
                 .prefetch_related(
                     "page_scores",
-                    "competitors",   # remove this line to stop loading competitors
+                    "competitors",  # remove this line to stop loading competitors
                     "recommendations",
                     "ai_probes",
                 )
@@ -798,6 +799,7 @@ class AnalysisRunDetailView(APIView):
 
     def get(self, request, run_id):
         from django.db.models import Prefetch
+
         try:
             # Pre-load every related collection the serializer touches so the
             # response is one batch of queries instead of five sequential
@@ -807,14 +809,11 @@ class AnalysisRunDetailView(APIView):
             # RecommendationSerializer.get_can_auto_fix() reads obj.analysis_run.url,
             # so we chain a select_related to avoid one query per recommendation.
             # We also defer llm_logs (~128 KB JSONField) on that join.
-            recs_qs = (
-                Recommendation.objects
-                .select_related("analysis_run")
-                .defer("analysis_run__llm_logs", "analysis_run__onboarding_prompts")
+            recs_qs = Recommendation.objects.select_related("analysis_run").defer(
+                "analysis_run__llm_logs", "analysis_run__onboarding_prompts"
             )
             run = (
-                AnalysisRun.objects
-                .select_related("brand_visibility", "organization")
+                AnalysisRun.objects.select_related("brand_visibility", "organization")
                 .prefetch_related(
                     "page_scores",
                     "competitors",
@@ -878,9 +877,10 @@ class ExportPDFView(APIView):
             )
 
         try:
+            import io
+
             from django.template.loader import render_to_string
             from xhtml2pdf import pisa
-            import io
 
             main_page = run.page_scores.filter(url=run.url).first()
             recommendations = run.recommendations.all()
@@ -899,11 +899,13 @@ class ExportPDFView(APIView):
                 for label, score in pillar_defs:
                     s = float(score or 0)
                     s = max(0.0, min(100.0, s))
-                    main_page_pillars.append({
-                        "label": label,
-                        "score": s,
-                        "remainder": 100.0 - s,
-                    })
+                    main_page_pillars.append(
+                        {
+                            "label": label,
+                            "score": s,
+                            "remainder": 100.0 - s,
+                        }
+                    )
 
             # Sort recommendations: critical → high → medium → low.
             priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -935,9 +937,7 @@ class ExportPDFView(APIView):
 
             pdf_buffer.seek(0)
             response = HttpResponse(pdf_buffer.read(), content_type="application/pdf")
-            response["Content-Disposition"] = (
-                f'attachment; filename="geo-analysis-{run.id}.pdf"'
-            )
+            response["Content-Disposition"] = f'attachment; filename="geo-analysis-{run.id}.pdf"'
             return response
 
         except ImportError as exc:
@@ -956,8 +956,10 @@ class ExportPDFView(APIView):
 
 # ============ Gamification Views ============
 
+
 class UserGamificationView(APIView):
     """Get user gamification profile"""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -969,8 +971,7 @@ class UserGamificationView(APIView):
             )
 
         gamification, created = UserGamification.objects.get_or_create(
-            user_email=email,
-            defaults={"user_email": email}
+            user_email=email, defaults={"user_email": email}
         )
 
         serializer = UserGamificationSerializer(gamification)
@@ -979,30 +980,27 @@ class UserGamificationView(APIView):
 
 class ActionTemplatesView(APIView):
     """Get available action templates"""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
-        templates = [
-            {**template, "action_type": key}
-            for key, template in ACTION_TEMPLATES.items()
-        ]
+        templates = [{**template, "action_type": key} for key, template in ACTION_TEMPLATES.items()]
         return Response(templates)
 
 
 class AchievementsView(APIView):
     """Get all possible achievements"""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
-        achievements = [
-            {**info, "code": key}
-            for key, info in ACHIEVEMENTS_INFO.items()
-        ]
+        achievements = [{**info, "code": key} for key, info in ACHIEVEMENTS_INFO.items()]
         return Response(achievements)
 
 
 class UserActionListView(APIView):
     """List user's actions"""
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]  # used by sidebar/actions dashboard refreshes
 
@@ -1015,18 +1013,19 @@ class UserActionListView(APIView):
             )
 
         status_filter = request.query_params.get("status")
-        
+
         actions = UserAction.objects.filter(user_email=email)
-        
+
         if status_filter:
             actions = actions.filter(status=status_filter)
-        
+
         serializer = UserActionSerializer(actions, many=True)
         return Response(serializer.data)
 
 
 class CreateUserActionView(APIView):
     """Create a new user action"""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1043,8 +1042,7 @@ class CreateUserActionView(APIView):
 
         # Get gamification profile
         gamification, _ = UserGamification.objects.get_or_create(
-            user_email=email,
-            defaults={"user_email": email}
+            user_email=email, defaults={"user_email": email}
         )
 
         # Determine points value
@@ -1054,18 +1052,14 @@ class CreateUserActionView(APIView):
         recommendation = None
         if data.get("recommendation_id"):
             try:
-                recommendation = Recommendation.objects.get(
-                    pk=data["recommendation_id"]
-                )
+                recommendation = Recommendation.objects.get(pk=data["recommendation_id"])
             except Recommendation.DoesNotExist:
                 pass
 
         analysis_run = None
         if data.get("analysis_run_id"):
             try:
-                analysis_run = AnalysisRun.objects.get(
-                    pk=data["analysis_run_id"]
-                )
+                analysis_run = AnalysisRun.objects.get(pk=data["analysis_run_id"])
             except AnalysisRun.DoesNotExist:
                 pass
 
@@ -1075,7 +1069,9 @@ class CreateUserActionView(APIView):
             analysis_run=analysis_run,
             recommendation=recommendation,
             action_type=data["action_type"],
-            title=data.get("title", ACTION_TEMPLATES.get(data["action_type"], {}).get("title", "Custom Action")),
+            title=data.get(
+                "title", ACTION_TEMPLATES.get(data["action_type"], {}).get("title", "Custom Action")
+            ),
             description=data.get("description", ""),
             points_value=points,
             score_before=data.get("score_before"),
@@ -1083,14 +1079,12 @@ class CreateUserActionView(APIView):
             status=UserAction.ActionStatus.PENDING,
         )
 
-        return Response(
-            UserActionSerializer(action).data,
-            status=status.HTTP_201_CREATED
-        )
+        return Response(UserActionSerializer(action).data, status=status.HTTP_201_CREATED)
 
 
 class UpdateUserActionView(APIView):
     """Update a user action (start, complete, verify)"""
+
     permission_classes = [AllowAny]
 
     def post(self, request, action_id):
@@ -1110,8 +1104,7 @@ class UpdateUserActionView(APIView):
 
         # Get or create gamification
         gamification, _ = UserGamification.objects.get_or_create(
-            user_email=email,
-            defaults={"user_email": email}
+            user_email=email, defaults={"user_email": email}
         )
 
         # Handle status changes
@@ -1164,6 +1157,7 @@ class UpdateUserActionView(APIView):
 
 class ActionStatsView(APIView):
     """Get action statistics for a user"""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -1175,14 +1169,13 @@ class ActionStatsView(APIView):
             )
 
         actions = UserAction.objects.filter(user_email=email)
-        
+
         run_id = request.query_params.get("run_id")
         if run_id:
             actions = actions.filter(analysis_run_id=run_id)
-        
+
         gamification, _ = UserGamification.objects.get_or_create(
-            user_email=email,
-            defaults={"user_email": email}
+            user_email=email, defaults={"user_email": email}
         )
 
         # Get recent achievements
@@ -1212,6 +1205,7 @@ class ActionStatsView(APIView):
 
 class CrawlEssentialsStatusView(APIView):
     """Get llms.txt/robots.txt/sitemap.xml status for Actions submenu."""
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]  # sidebar/actions open frequently
 
@@ -1282,9 +1276,7 @@ class CrawlEssentialsStatusView(APIView):
                     )
                 )
 
-        overall_score = round(
-            sum(item["score"] for item in files) / len(files), 1
-        ) if files else 0.0
+        overall_score = round(sum(item["score"] for item in files) / len(files), 1) if files else 0.0
 
         return Response(
             {
@@ -1300,6 +1292,7 @@ class CrawlEssentialsStatusView(APIView):
 
 class BlogAutomationConfigView(APIView):
     """Create/update automation settings and queue scheduled jobs."""
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]
 
@@ -1318,15 +1311,19 @@ class BlogAutomationConfigView(APIView):
             analyzed_url=analyzed_url,
         )
         if not config:
-            return Response({"error": "Could not resolve automation config."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Could not resolve automation config."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         if config.is_active:
             _enqueue_daily_jobs(config, days_ahead=21)
             _process_due_blog_jobs(config, limit=10)
 
-        return Response({
-            "config": BlogAutomationConfigSerializer(config).data,
-        })
+        return Response(
+            {
+                "config": BlogAutomationConfigSerializer(config).data,
+            }
+        )
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
@@ -1357,19 +1354,24 @@ class BlogAutomationConfigView(APIView):
             is_active=request.data.get("is_active"),
         )
         if not config:
-            return Response({"error": "Could not save automation config."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Could not save automation config."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         queued = _enqueue_daily_jobs(config, days_ahead=21) if config.is_active else 0
 
-        return Response({
-            "message": "Automation settings saved.",
-            "queued_jobs": queued,
-            "config": BlogAutomationConfigSerializer(config).data,
-        })
+        return Response(
+            {
+                "message": "Automation settings saved.",
+                "queued_jobs": queued,
+                "config": BlogAutomationConfigSerializer(config).data,
+            }
+        )
 
 
 class BlogAutomationCalendarView(APIView):
     """Calendar/list view for scheduled and published automated blogs."""
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]
 
@@ -1407,6 +1409,7 @@ class BlogAutomationCalendarView(APIView):
 
 class BlogAutomationProcessDueView(APIView):
     """Process due scheduled blogs: auto-publish or move to review queue."""
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]
 
@@ -1426,6 +1429,7 @@ class BlogAutomationProcessDueView(APIView):
 
 class BlogAutomationGenerateView(APIView):
     """Generate AI blog draft for Actions submenu."""
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
@@ -1456,7 +1460,8 @@ class BlogAutomationGenerateView(APIView):
 
         run = (
             _safe_first(AnalysisRun.objects.filter(pk=run_id), context="blog generate run lookup")
-            if run_id else None
+            if run_id
+            else None
         )
         if not topic:
             brand = (run.brand_name if run else "") or urlparse(site_url).netloc
@@ -1507,19 +1512,22 @@ class BlogAutomationGenerateView(APIView):
             )
             draft_job_payload = BlogAutomationJobSerializer(job).data
 
-        return Response({
-            "submenu_key": "ai-blog-automation",
-            "submenu_name": "AI Blog Automation",
-            "site_url": site_url,
-            "source": source,
-            "publish_provider": provider if integration else "none",
-            "draft": draft,
-            "draft_job": draft_job_payload,
-        })
+        return Response(
+            {
+                "submenu_key": "ai-blog-automation",
+                "submenu_name": "AI Blog Automation",
+                "site_url": site_url,
+                "source": source,
+                "publish_provider": provider if integration else "none",
+                "draft": draft,
+                "draft_job": draft_job_payload,
+            }
+        )
 
 
 class BlogAutomationPublishView(APIView):
     """Publish AI-generated draft to connected CMS."""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1537,21 +1545,31 @@ class BlogAutomationPublishView(APIView):
             if not job:
                 return Response({"error": "Blog job not found."}, status=status.HTTP_404_NOT_FOUND)
             if not job.title or not job.content_markdown:
-                return Response({"error": "Selected job has no draft content."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"error": "Selected job has no draft content."}, status=status.HTTP_400_BAD_REQUEST
+                )
             try:
                 published = _publish_blog_job(job, publish_now=publish_now)
             except ValueError as exc:
                 return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             except Exception:
                 logger.exception("Blog publish failed.")
-                return Response({"error": "Unexpected error while publishing draft."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            return Response({"message": "Blog job published.", "provider": job.provider, "published": published})
+                return Response(
+                    {"error": "Unexpected error while publishing draft."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            return Response(
+                {"message": "Blog job published.", "provider": job.provider, "published": published}
+            )
 
         draft = request.data.get("draft") or {}
         title = str(draft.get("title", "")).strip()
         content_markdown = str(draft.get("content_markdown", "")).strip()
         if not title or not content_markdown:
-            return Response({"error": "Draft title and content_markdown are required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Draft title and content_markdown are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         config = _get_or_create_blog_config(
             email=email,
@@ -1560,7 +1578,9 @@ class BlogAutomationPublishView(APIView):
             is_active=False,
         )
         if not config:
-            return Response({"error": "Could not prepare publish config."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Could not prepare publish config."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         job = BlogAutomationJob.objects.create(
             config=config,
@@ -1585,19 +1605,29 @@ class BlogAutomationPublishView(APIView):
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
             logger.exception("Blog publish failed.")
-            return Response({"error": "Unexpected error while publishing draft."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": "Unexpected error while publishing draft."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
-        return Response({"message": "Blog draft processed successfully.", "provider": job.provider, "published": published})
+        return Response(
+            {
+                "message": "Blog draft processed successfully.",
+                "provider": job.provider,
+                "published": published,
+            }
+        )
 
 
 class QuickActionView(APIView):
     """Quick action - create action from recommendation"""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
         recommendation_id = request.data.get("recommendation_id")
-        
+
         if not email:
             return Response(
                 {"error": "Email parameter is required."},
@@ -1633,11 +1663,10 @@ class QuickActionView(APIView):
         }
 
         action_type = action_type_map.get(recommendation.category, "add_faq")
-        
+
         # Get gamification
         gamification, _ = UserGamification.objects.get_or_create(
-            user_email=email,
-            defaults={"user_email": email}
+            user_email=email, defaults={"user_email": email}
         )
         points = ACTION_TEMPLATES.get(action_type, {}).get("points", 10)
 
@@ -1661,12 +1690,13 @@ class QuickActionView(APIView):
 
 class BulkCreateUserActionView(APIView):
     """Bulk create actions from recommendations"""
+
     permission_classes = [AllowAny]
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
         recommendations_data = request.data.get("recommendations", [])
-        
+
         if not email:
             return Response(
                 {"error": "Email parameter is required."},
@@ -1681,8 +1711,7 @@ class BulkCreateUserActionView(APIView):
 
         # Get gamification
         gamification, _ = UserGamification.objects.get_or_create(
-            user_email=email,
-            defaults={"user_email": email}
+            user_email=email, defaults={"user_email": email}
         )
 
         # Priority to points mapping
@@ -1704,31 +1733,28 @@ class BulkCreateUserActionView(APIView):
         }
 
         created_actions = []
-        
+
         for rec_data in recommendations_data:
             rec_id = rec_data.get("id")
             title = rec_data.get("title", "")
-            description = rec_data.get("description", "")
             action_text = rec_data.get("action", "")
             priority = rec_data.get("priority", "medium")
             analysis_run_id = rec_data.get("analysis_run_id")
-            
+
             # Only check for duplicates if we're scanning the SAME website again
             # Check by analysis_run_id + recommendation combination
             if rec_id and analysis_run_id:
                 existing = UserAction.objects.filter(
-                    recommendation_id=rec_id,
-                    analysis_run_id=analysis_run_id,
-                    user_email=email
+                    recommendation_id=rec_id, analysis_run_id=analysis_run_id, user_email=email
                 ).first()
                 if existing:
                     continue
-            
+
             # Get recommendation from DB if it exists
             recommendation = None
             analysis_run = None
             score_before = None
-            
+
             if rec_id:
                 try:
                     recommendation = Recommendation.objects.get(pk=rec_id)
@@ -1736,7 +1762,7 @@ class BulkCreateUserActionView(APIView):
                     score_before = analysis_run.composite_score if analysis_run else None
                 except Recommendation.DoesNotExist:
                     pass
-            
+
             # Determine action type from category
             action_type = "add_faq"
             if recommendation:
@@ -1751,9 +1777,9 @@ class BulkCreateUserActionView(APIView):
                     action_type = "add_author"
                 elif "reddit" in title.lower():
                     action_type = "post_reddit"
-            
+
             points = priority_points.get(priority, 10)
-            
+
             action = UserAction.objects.create(
                 user_email=email,
                 action_type=action_type,
@@ -1773,6 +1799,7 @@ class BulkCreateUserActionView(APIView):
 
 class GeneratePromptsView(APIView):
     """POST /api/analyzer/generate-prompts/ — AI-generate brand-relevant prompts for onboarding."""
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
@@ -1790,12 +1817,13 @@ class GeneratePromptsView(APIView):
         meta_desc = ""
         try:
             from .pipeline.crawler import crawl_page
+
             if brand_url:
                 quick_crawl = crawl_page(brand_url)
                 if quick_crawl.ok:
                     page_content = quick_crawl.text[:2000]
                     md = quick_crawl.soup.find("meta", attrs={"name": "description"})
-                    meta_desc = (md["content"].strip() if md and md.get("content") else "")
+                    meta_desc = md["content"].strip() if md and md.get("content") else ""
         except Exception:
             pass
 
@@ -1810,31 +1838,33 @@ class GeneratePromptsView(APIView):
             return Response({"prompts": prompts})
         except Exception as exc:
             logger.warning("Generate prompts failed: %s", exc)
-            return Response({"prompts": [
-                f"What are the best alternatives to {brand_name}?",
-                f"Is {brand_name} worth using?",
-                f"Compare {brand_name} with competitors",
-                f"What do experts recommend instead of {brand_name}?",
-                f"Top tools similar to {brand_name}",
-            ]})
+            return Response(
+                {
+                    "prompts": [
+                        f"What are the best alternatives to {brand_name}?",
+                        f"Is {brand_name} worth using?",
+                        f"Compare {brand_name} with competitors",
+                        f"What do experts recommend instead of {brand_name}?",
+                        f"Top tools similar to {brand_name}",
+                    ]
+                }
+            )
 
 
 # ============ Prompt Tracking Views ============
 
+
 def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
     """Background worker: fires prompt across engines and saves PromptResult rows."""
     from django.db import close_old_connections
+
+    from .pipeline.citations import competitor_hosts_for_run, host_of, persist_prompt_result
     from .pipeline.prompt_tracker import fire_prompt_across_engines
-    from .pipeline.citations import persist_prompt_result, host_of, competitor_hosts_for_run
 
     close_old_connections()
     try:
         em = (track.analysis_run.email or "").strip()
-        allowed = (
-            get_plan_limits(em)["engines"]
-            if is_plan_limits_enforcement_enabled() and em
-            else None
-        )
+        allowed = get_plan_limits(em)["engines"] if is_plan_limits_enforcement_enabled() and em else None
         engine_results = fire_prompt_across_engines(
             track.prompt_text, brand_name, brand_url, allowed_engines=allowed
         )
@@ -1846,7 +1876,10 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
 
         # Compute and persist 5-factor scores
         from .pipeline.prompt_tracker import compute_prompt_score
-        all_res = list(track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
+
+        all_res = list(
+            track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine")
+        )
         sd = compute_prompt_score(all_res)
         track.score = sd["score"]
         track.authority_score = sd["authority_score"]
@@ -1854,11 +1887,18 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
         track.structural_score = sd["structural_score"]
         track.semantic_score = sd["semantic_score"]
         track.third_party_score = sd["third_party_score"]
-        track.save(update_fields=[
-            "score", "authority_score", "content_quality_score",
-            "structural_score", "semantic_score", "third_party_score",
-        ])
+        track.save(
+            update_fields=[
+                "score",
+                "authority_score",
+                "content_quality_score",
+                "structural_score",
+                "semantic_score",
+                "third_party_score",
+            ]
+        )
         from ._cache import invalidate_run_aggregates
+
         invalidate_run_aggregates(track.analysis_run.slug)
     except Exception as exc:
         logger.warning("PromptTrack #%d fire failed: %s", track.pk, exc)
@@ -1869,23 +1909,25 @@ class PromptListCreateView(APIView):
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         tracks = (
-            run.prompt_tracks
-               .filter(deleted_at__isnull=True)
-               .select_related("analysis_run")
-               # AnalysisRun.llm_logs / onboarding_prompts are large JSONField
-               # blobs we don't need here — defer them to keep the join cheap.
-               .defer("analysis_run__llm_logs", "analysis_run__onboarding_prompts")
-               .prefetch_related("results", "results__citations")
-               .order_by("-score", "-created_at")
+            run.prompt_tracks.filter(deleted_at__isnull=True)
+            .select_related("analysis_run")
+            # AnalysisRun.llm_logs / onboarding_prompts are large JSONField
+            # blobs we don't need here — defer them to keep the join cheap.
+            .defer("analysis_run__llm_logs", "analysis_run__onboarding_prompts")
+            .prefetch_related("results", "results__citations")
+            .order_by("-score", "-created_at")
         )
         serializer = PromptTrackSerializer(tracks, many=True)
         return Response(serializer.data)
 
     def post(self, request, slug):
-        from django.shortcuts import get_object_or_404
         import threading
+
+        from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         ser = AddPromptSerializer(data=request.data)
         if not ser.is_valid():
@@ -1929,35 +1971,41 @@ class PromptListCreateView(APIView):
 
 class PromptResultDetailView(APIView):
     """GET /runs/s/<slug>/prompts/<track_id>/results/<result_id>/ — full response_text."""
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug, track_id, result_id):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         track = get_object_or_404(PromptTrack, pk=track_id, analysis_run=run)
         result = get_object_or_404(PromptResult, pk=result_id, prompt_track=track)
         from .serializers import PromptResultFullSerializer
+
         return Response(PromptResultFullSerializer(result).data)
 
 
 class RecheckPromptView(APIView):
     """POST /runs/s/<slug>/prompts/<track_id>/recheck/ — re-fire one prompt now."""
+
     permission_classes = [AllowAny]
 
     def post(self, request, slug, track_id):
-        from django.shortcuts import get_object_or_404
         import threading
+
+        from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
-        track = get_object_or_404(
-            PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True
-        )
+        track = get_object_or_404(PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True)
 
         brand_name = run.brand_name or run.url
         brand_url = run.url
 
         def _do():
-            from .pipeline.prompt_tracker import recheck_track
             from django.db import close_old_connections
+
+            from .pipeline.prompt_tracker import recheck_track
+
             close_old_connections()
             recheck_track(track, brand_name, brand_url)
 
@@ -1972,10 +2020,12 @@ class PromptBacklinksView(APIView):
     Translates ``ProviderNotConfigured`` into a structured 503 the frontend
     can recognize and surface as "Backlink provider not configured".
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug, track_id):
         from django.shortcuts import get_object_or_404
+
         from .services.backlink_authority import (
             BacklinkAuthorityService,
             ProviderNotConfigured,
@@ -1983,7 +2033,10 @@ class PromptBacklinksView(APIView):
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         track = get_object_or_404(
-            PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True,
+            PromptTrack,
+            pk=track_id,
+            analysis_run=run,
+            deleted_at__isnull=True,
         )
 
         try:
@@ -2001,6 +2054,7 @@ class PromptOpportunitiesView(APIView):
 
     Thin HTTP layer — delegates to ``OpportunityService`` for all logic.
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug, track_id):
@@ -2010,6 +2064,7 @@ class PromptOpportunitiesView(APIView):
     def post(self, request, slug, track_id):
         service = _opportunity_service(slug, track_id)
         from .services.opportunities import OpportunityServiceError
+
         try:
             return Response(service.regenerate())
         except OpportunityServiceError as exc:
@@ -2021,11 +2076,13 @@ class PromptOpportunitiesView(APIView):
 
 class PromptOpportunityDetailView(APIView):
     """PATCH / DELETE /runs/s/<slug>/prompts/<track_id>/opportunities/<opp_id>/"""
+
     permission_classes = [AllowAny]
 
     def patch(self, request, slug, track_id, opp_id):
         service = _opportunity_service(slug, track_id)
         from .services.opportunities import OpportunityServiceError
+
         try:
             payload = service.update_status(
                 opp_id,
@@ -2039,6 +2096,7 @@ class PromptOpportunityDetailView(APIView):
     def delete(self, request, slug, track_id, opp_id):
         service = _opportunity_service(slug, track_id)
         from .services.opportunities import OpportunityServiceError
+
         try:
             service.delete(opp_id)
         except OpportunityServiceError as exc:
@@ -2049,11 +2107,15 @@ class PromptOpportunityDetailView(APIView):
 def _opportunity_service(slug: str, track_id: int):
     """Resolve the run+track and return an OpportunityService bound to it."""
     from django.shortcuts import get_object_or_404
+
     from .services.opportunities import OpportunityService
 
     run = get_object_or_404(AnalysisRun, slug=slug)
     track = get_object_or_404(
-        PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True,
+        PromptTrack,
+        pk=track_id,
+        analysis_run=run,
+        deleted_at__isnull=True,
     )
     return OpportunityService(track=track)
 
@@ -2066,30 +2128,34 @@ class PromptDeleteView(APIView):
     deleting-and-re-adding to bypass plan limits. Usage/billing endpoints
     also count soft-deleted rows.
     """
+
     permission_classes = [AllowAny]
 
     def delete(self, request, slug, track_id):
         from django.shortcuts import get_object_or_404
         from django.utils import timezone
+
         run = get_object_or_404(AnalysisRun, slug=slug)
-        track = get_object_or_404(
-            PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True
-        )
+        track = get_object_or_404(PromptTrack, pk=track_id, analysis_run=run, deleted_at__isnull=True)
         track.deleted_at = timezone.now()
         track.save(update_fields=["deleted_at"])
         from ._cache import invalidate_run_aggregates
+
         invalidate_run_aggregates(slug)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class RecheckAllPromptsView(APIView):
     """POST /runs/s/<slug>/recheck-all/ — re-fire every prompt for this run."""
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
-        from django.shortcuts import get_object_or_404
         import threading
+
+        from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         tracks = list(run.prompt_tracks.filter(deleted_at__isnull=True))
 
@@ -2100,8 +2166,10 @@ class RecheckAllPromptsView(APIView):
         brand_url = run.url
 
         def _do_all():
-            from .pipeline.prompt_tracker import recheck_track
             from django.db import close_old_connections
+
+            from .pipeline.prompt_tracker import recheck_track
+
             close_old_connections()
             for track in tracks:
                 try:
@@ -2120,8 +2188,9 @@ class ShareOfVoiceView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
-        from django.shortcuts import get_object_or_404
         from django.db.models import Count, Q
+        from django.shortcuts import get_object_or_404
+
         from ._cache import cached_or_compute
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -2156,10 +2225,12 @@ class CitationTrendView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
-        from django.shortcuts import get_object_or_404
-        from django.db.models.functions import TruncWeek
         from django.db.models import Count, Q
+        from django.db.models.functions import TruncWeek
+        from django.shortcuts import get_object_or_404
+
         from ._cache import cached_or_compute
+
         run = get_object_or_404(AnalysisRun, slug=slug)
 
         def _compute():
@@ -2174,8 +2245,7 @@ class CitationTrendView(APIView):
             if allowed is not None:
                 base = base.filter(engine__in=allowed)
             qs = (
-                base
-                .annotate(week_start=TruncWeek("checked_at"))
+                base.annotate(week_start=TruncWeek("checked_at"))
                 .values("week_start", "engine")
                 .annotate(
                     total=Count("id"),
@@ -2188,13 +2258,15 @@ class CitationTrendView(APIView):
             for row in qs:
                 total = row["total"]
                 mentioned = row["mentioned"]
-                data.append({
-                    # Stored as ISO string so Redis serialization round-trips
-                    # cleanly (date objects don't pickle through JSON cache).
-                    "week_start": row["week_start"].date().isoformat() if row["week_start"] else None,
-                    "engine": row["engine"],
-                    "rate_pct": round((mentioned / total * 100), 1) if total > 0 else 0.0,
-                })
+                data.append(
+                    {
+                        # Stored as ISO string so Redis serialization round-trips
+                        # cleanly (date objects don't pickle through JSON cache).
+                        "week_start": row["week_start"].date().isoformat() if row["week_start"] else None,
+                        "engine": row["engine"],
+                        "rate_pct": round((mentioned / total * 100), 1) if total > 0 else 0.0,
+                    }
+                )
             return data
 
         data = cached_or_compute(f"trend:{slug}", 300, _compute)
@@ -2213,11 +2285,13 @@ class AiRecommendationSummaryView(APIView):
       recommendation_pct — % that named the brand AND were positive sentiment
       citation_pct       — % that cited a URL on the brand's own domain
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
+        from django.db.models import Count, Exists, OuterRef, Q
         from django.shortcuts import get_object_or_404
-        from django.db.models import Count, Q, Exists, OuterRef
+
         from ._cache import cached_or_compute
         from .models import PromptCitation
 
@@ -2278,133 +2352,16 @@ class AiRecommendationSummaryView(APIView):
             for row in per_engine_rows:
                 e_total = row["total"] or 0
                 e_rec = row["recommended"] or 0
-                per_engine.append({
-                    "engine": row["engine"],
-                    "total": e_total,
-                    "mentioned": row["mentioned"] or 0,
-                    "recommended": e_rec,
-                    "cited": row["cited"] or 0,
-                    "recommendation_pct": round((e_rec / e_total * 100), 1) if e_total > 0 else 0.0,
-                })
-
-            # Up to 6 sample positive quotes so the user can audit the score.
-            sample_qs = (
-                annotated.filter(brand_mentioned=True, sentiment=PromptResult.Sentiment.POSITIVE)
-                .exclude(response_text="")
-                .select_related("prompt_track")
-                .order_by("-confidence", "-checked_at")[:6]
-            )
-            samples = [
-                {
-                    "engine": pr.engine,
-                    "prompt": (pr.prompt_track.prompt_text or "")[:240],
-                    "quote": (pr.response_text or "")[:400],
-                    "sentiment": pr.sentiment,
-                }
-                for pr in sample_qs
-            ]
-
-            return {
-                "total": total,
-                "mentioned": mentioned,
-                "recommended": recommended,
-                "cited": cited,
-                "mention_pct": _pct(mentioned),
-                "recommendation_pct": _pct(recommended),
-                "citation_pct": _pct(cited),
-                "per_engine": per_engine,
-                "samples": samples,
-            }
-
-        data = cached_or_compute(f"ai_rec_summary:{slug}", 600, _compute)
-        return Response(AiRecommendationSummarySerializer(data).data)
-
-
-class AiRecommendationSummaryView(APIView):
-    """GET /runs/s/<slug>/ai-recommendation-summary/
-
-    Aggregated answer to "how often does AI recommend this brand?" for the
-    Overview citation card. Reads only existing PromptResult / PromptCitation
-    rows — never fires a new AI call — so the response is honest and cheap.
-
-    Three honest signals:
-      mention_pct        — % of prompt responses that named the brand at all
-      recommendation_pct — % that named the brand AND were positive sentiment
-      citation_pct       — % that cited a URL on the brand's own domain
-    """
-    permission_classes = [AllowAny]
-
-    def get(self, request, slug):
-        from django.shortcuts import get_object_or_404
-        from django.db.models import Count, Q, Exists, OuterRef
-        from ._cache import cached_or_compute
-        from .models import PromptCitation
-
-        run = get_object_or_404(AnalysisRun, slug=slug)
-
-        def _compute():
-            em = (run.email or "").strip()
-            valid_engine_keys = {e[0] for e in PromptResult.Engine.choices}
-            if is_plan_limits_enforcement_enabled() and em:
-                allowed = [e for e in get_plan_limits(em)["engines"] if e in valid_engine_keys]
-            else:
-                allowed = None
-
-            base = PromptResult.objects.filter(
-                prompt_track__analysis_run=run,
-                prompt_track__deleted_at__isnull=True,
-            )
-            if allowed is not None:
-                base = base.filter(engine__in=allowed)
-
-            brand_cite_exists = PromptCitation.objects.filter(
-                prompt_result=OuterRef("pk"),
-                is_brand=True,
-            )
-            annotated = base.annotate(has_brand_citation=Exists(brand_cite_exists))
-
-            totals = annotated.aggregate(
-                total=Count("id"),
-                mentioned=Count("id", filter=Q(brand_mentioned=True)),
-                recommended=Count(
-                    "id",
-                    filter=Q(brand_mentioned=True, sentiment=PromptResult.Sentiment.POSITIVE),
-                ),
-                cited=Count("id", filter=Q(has_brand_citation=True)),
-            )
-            total = totals["total"] or 0
-            mentioned = totals["mentioned"] or 0
-            recommended = totals["recommended"] or 0
-            cited = totals["cited"] or 0
-
-            def _pct(n: int) -> float:
-                return round((n / total * 100), 1) if total > 0 else 0.0
-
-            per_engine_rows = (
-                annotated.values("engine")
-                .annotate(
-                    total=Count("id"),
-                    mentioned=Count("id", filter=Q(brand_mentioned=True)),
-                    recommended=Count(
-                        "id",
-                        filter=Q(brand_mentioned=True, sentiment=PromptResult.Sentiment.POSITIVE),
-                    ),
-                    cited=Count("id", filter=Q(has_brand_citation=True)),
+                per_engine.append(
+                    {
+                        "engine": row["engine"],
+                        "total": e_total,
+                        "mentioned": row["mentioned"] or 0,
+                        "recommended": e_rec,
+                        "cited": row["cited"] or 0,
+                        "recommendation_pct": round((e_rec / e_total * 100), 1) if e_total > 0 else 0.0,
+                    }
                 )
-                .order_by("engine")
-            )
-            per_engine = []
-            for row in per_engine_rows:
-                e_total = row["total"] or 0
-                e_rec = row["recommended"] or 0
-                per_engine.append({
-                    "engine": row["engine"],
-                    "total": e_total,
-                    "mentioned": row["mentioned"] or 0,
-                    "recommended": e_rec,
-                    "cited": row["cited"] or 0,
-                    "recommendation_pct": round((e_rec / e_total * 100), 1) if e_total > 0 else 0.0,
-                })
 
             # Up to 6 sample positive quotes so the user can audit the score.
             sample_qs = (
@@ -2446,14 +2403,17 @@ class CitationSourcesView(APIView):
     buckets `your_pages` and `rival_pages` ranked by mention frequency, so the
     frontend can render "pages AI loves" without a second query.
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
-        from django.shortcuts import get_object_or_404
-        from django.db.models import Count, Q
         from collections import defaultdict
-        from .models import PromptCitation
+
+        from django.db.models import Count, Q
+        from django.shortcuts import get_object_or_404
+
         from ._cache import cached_or_compute
+        from .models import PromptCitation
 
         run = get_object_or_404(AnalysisRun, slug=slug)
 
@@ -2471,11 +2431,7 @@ class CitationSourcesView(APIView):
             )
 
             # Domain roll-up
-            domain_rows = list(
-                qs.values("domain")
-                .annotate(total=Count("id"))
-                .order_by("-total")[:40]
-            )
+            domain_rows = list(qs.values("domain").annotate(total=Count("id")).order_by("-total")[:40])
             top_domains = [r["domain"] for r in domain_rows]
 
             # Flags per domain (is_brand / is_competitor) — restricted to the
@@ -2510,14 +2466,16 @@ class CitationSourcesView(APIView):
             for row in domain_rows:
                 d = row["domain"]
                 flags = flag_map.get(d, {"is_brand": False, "is_competitor": False})
-                domains.append({
-                    "domain": d,
-                    "total": row["total"],
-                    "is_brand": flags["is_brand"],
-                    "is_competitor": flags["is_competitor"],
-                    "by_engine": dict(by_engine.get(d, {})),
-                    "sample_url": sample_map.get(d, ""),
-                })
+                domains.append(
+                    {
+                        "domain": d,
+                        "total": row["total"],
+                        "is_brand": flags["is_brand"],
+                        "is_competitor": flags["is_competitor"],
+                        "by_engine": dict(by_engine.get(d, {})),
+                        "sample_url": sample_map.get(d, ""),
+                    }
+                )
 
             your_pages = list(
                 qs.filter(is_brand=True)
@@ -2554,11 +2512,13 @@ class BrandKitView(APIView):
     and review-site submission forms. It's a thin wrapper around
     ``services.brand_kit.get_or_generate``.
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
-        from .services.brand_kit import get_or_generate, BrandKitError
+
+        from .services.brand_kit import BrandKitError, get_or_generate
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         try:
@@ -2571,7 +2531,8 @@ class BrandKitView(APIView):
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
-        from .services.brand_kit import get_or_generate, BrandKitError
+
+        from .services.brand_kit import BrandKitError, get_or_generate
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         try:
@@ -2592,12 +2553,15 @@ class DomainAnalyticsView(APIView):
     GET:  return the cached snapshot, auto-fetch on first call.
     POST: force a fresh fetch (3 DataForSEO API calls, ~$0.015 / refresh).
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [DataForSEOThrottle]
 
     def _respond(self, run, *, force: bool):
-        from .services.domain_analytics import get_or_generate, DomainAnalyticsError
-        from apps.integrations.services.dataforseo import DataForSEONotConfigured
+        from apps.integrations.services.dataforseo import DataForSEOError, DataForSEONotConfigured
+
+        from .services.domain_analytics import DomainAnalyticsError, get_or_generate
+
         try:
             return Response(get_or_generate(run, force=force))
         except DataForSEONotConfigured:
@@ -2608,6 +2572,14 @@ class DomainAnalyticsView(APIView):
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        except DataForSEOError as exc:
+            # Upstream API failure (out of credits, billing issue, 4xx/5xx).
+            msg = str(exc)
+            code = "dataforseo_billing" if "402" in msg else "dataforseo_upstream"
+            return Response(
+                {"detail": msg, "code": code},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         except DomainAnalyticsError as exc:
             return Response(
                 {"detail": str(exc), "code": "domain_analytics_failed"},
@@ -2616,28 +2588,34 @@ class DomainAnalyticsView(APIView):
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         return self._respond(run, force=False)
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         return self._respond(run, force=True)
 
 
 class CompetitorListCreateView(APIView):
     """GET/POST /api/analyzer/runs/s/<slug>/competitors/"""
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         competitors = run.competitors.all().order_by("-scored", "-composite_score")
         from .serializers import CompetitorSerializer
+
         return Response(CompetitorSerializer(competitors, many=True).data)
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         name = request.data.get("name", "").strip()
         url = request.data.get("url", "").strip()
@@ -2645,15 +2623,18 @@ class CompetitorListCreateView(APIView):
             return Response({"error": "name and url are required."}, status=status.HTTP_400_BAD_REQUEST)
         competitor = run.competitors.create(name=name, url=url)
         from .serializers import CompetitorSerializer
+
         return Response(CompetitorSerializer(competitor).data, status=status.HTTP_201_CREATED)
 
 
 class CompetitorDetailView(APIView):
     """PATCH/DELETE /api/analyzer/runs/s/<slug>/competitors/<id>/"""
+
     permission_classes = [AllowAny]
 
     def patch(self, request, slug, competitor_id):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         competitor = get_object_or_404(Competitor, pk=competitor_id, analysis_run=run)
         if "name" in request.data:
@@ -2662,10 +2643,12 @@ class CompetitorDetailView(APIView):
             competitor.url = request.data["url"].strip()
         competitor.save(update_fields=["name", "url"])
         from .serializers import CompetitorSerializer
+
         return Response(CompetitorSerializer(competitor).data)
 
     def delete(self, request, slug, competitor_id):
         from django.shortcuts import get_object_or_404
+
         run = get_object_or_404(AnalysisRun, slug=slug)
         competitor = get_object_or_404(Competitor, pk=competitor_id, analysis_run=run)
         competitor.delete()
@@ -2674,8 +2657,10 @@ class CompetitorDetailView(APIView):
 
 # ── Score History ──────────────────────────────────────────────────────────
 
+
 class ScoreHistoryView(APIView):
     """GET /api/analyzer/runs/history/?email=&org_id="""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -2695,8 +2680,7 @@ class ScoreHistoryView(APIView):
         # Order by when the run finished updating (score finalized); expose that as `date`
         # so the chart shows distinct points per analysis, not just calendar day.
         data = list(
-            qs.order_by("updated_at")
-            .values("id", "created_at", "updated_at", "composite_score", "slug")
+            qs.order_by("updated_at").values("id", "created_at", "updated_at", "composite_score", "slug")
         )
         result = []
         prev_score = None
@@ -2725,8 +2709,10 @@ class ScoreHistoryView(APIView):
 
 # ── Scheduled Re-analysis ─────────────────────────────────────────────────
 
+
 class ScheduledAnalysisView(APIView):
     """GET/POST /api/analyzer/schedule/"""
+
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -2736,9 +2722,11 @@ class ScheduledAnalysisView(APIView):
             return Response({"error": "email and org_id required."}, status=status.HTTP_400_BAD_REQUEST)
 
         from .models import ScheduledAnalysis
+
         try:
             schedule = ScheduledAnalysis.objects.get(organization_id=org_id, email=email)
             from .serializers import ScheduledAnalysisSerializer
+
             return Response(ScheduledAnalysisSerializer(schedule).data)
         except ScheduledAnalysis.DoesNotExist:
             return Response(None, status=status.HTTP_200_OK)
@@ -2756,7 +2744,9 @@ class ScheduledAnalysisView(APIView):
             return Response({"error": "email, org_id, and url required."}, status=status.HTTP_400_BAD_REQUEST)
 
         if frequency not in ("once", "weekly", "monthly"):
-            return Response({"error": "frequency must be once/weekly/monthly."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "frequency must be once/weekly/monthly."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             org = Organization.objects.get(pk=org_id)
@@ -2767,21 +2757,29 @@ class ScheduledAnalysisView(APIView):
         next_run_at = None
         if run_at_raw:
             from django.utils.dateparse import parse_datetime
+
             parsed = parse_datetime(str(run_at_raw))
             if not parsed:
-                return Response({"error": "run_at must be an ISO datetime."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"error": "run_at must be an ISO datetime."}, status=status.HTTP_400_BAD_REQUEST
+                )
             if timezone.is_naive(parsed):
                 parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
             if parsed <= timezone.now():
-                return Response({"error": "run_at must be in the future."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"error": "run_at must be in the future."}, status=status.HTTP_400_BAD_REQUEST
+                )
             next_run_at = parsed
         else:
             if frequency == "once":
-                return Response({"error": "run_at is required when frequency=once."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"error": "run_at is required when frequency=once."}, status=status.HTTP_400_BAD_REQUEST
+                )
             delta = timedelta(days=7) if frequency == "weekly" else timedelta(days=30)
             next_run_at = timezone.now() + delta
 
         from .models import ScheduledAnalysis
+
         schedule, created = ScheduledAnalysis.objects.update_or_create(
             organization=org,
             email=email,
@@ -2794,19 +2792,26 @@ class ScheduledAnalysisView(APIView):
             },
         )
         from .serializers import ScheduledAnalysisSerializer
-        return Response(ScheduledAnalysisSerializer(schedule).data, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
+
+        return Response(
+            ScheduledAnalysisSerializer(schedule).data,
+            status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED,
+        )
 
 
 # ── Auto-Fix ──────────────────────────────────────────────────────────────
 
+
 class AutoFixView(APIView):
     """GET/POST /api/analyzer/runs/s/<slug>/auto-fix/"""
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug):
         """Return fix status for all recommendations in this run, including cross-run fixes."""
         from django.shortcuts import get_object_or_404
+
         from .models import AutoFixJob
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -2825,8 +2830,7 @@ class AutoFixView(APIView):
 
         if run.organization:
             prev_fixes = (
-                AutoFixJob.objects
-                .filter(analysis_run__organization=run.organization, status="success")
+                AutoFixJob.objects.filter(analysis_run__organization=run.organization, status="success")
                 .exclude(analysis_run=run)
                 .select_related("recommendation")
             )
@@ -2850,20 +2854,24 @@ class AutoFixView(APIView):
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .auto_fix import apply_fixes
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         recommendation_ids = request.data.get("recommendation_ids", [])
         email = request.data.get("email", "").lower().strip()
-        org_id = request.data.get("org_id")
 
         if not recommendation_ids or not email:
-            return Response({"error": "recommendation_ids and email are required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "recommendation_ids and email are required."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Match Shopify vs WordPress to the analyzed URL (org may have both connected)
         org = run.organization
         if not org:
-            return Response({"error": "No organization linked to this run."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "No organization linked to this run."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         from .integration_resolve import resolve_store_integration_for_run
 
@@ -2875,9 +2883,7 @@ class AutoFixView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        recommendations = Recommendation.objects.filter(
-            id__in=recommendation_ids, analysis_run=run
-        )
+        recommendations = Recommendation.objects.filter(id__in=recommendation_ids, analysis_run=run)
 
         results = apply_fixes(run, integration, list(recommendations))
         return Response(results)
@@ -2890,11 +2896,13 @@ class AutoFixPreviewView(APIView):
     already exists for the same (run, recommendation), returns it without
     re-running the LLM. Pass force=true to regenerate.
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .auto_fix import generate_fix_preview
         from .models import AutoFixJob
 
@@ -2904,13 +2912,16 @@ class AutoFixPreviewView(APIView):
         force = bool(request.data.get("force"))
 
         if not rec_id or not email:
-            return Response({"error": "recommendation_id and email required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "recommendation_id and email required."}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         org = run.organization
         if not org:
             return Response({"error": "No organization linked."}, status=status.HTTP_400_BAD_REQUEST)
 
         from .integration_resolve import resolve_store_integration_for_run
+
         integration = resolve_store_integration_for_run(org, run.url or "")
 
         if not integration:
@@ -2922,11 +2933,15 @@ class AutoFixPreviewView(APIView):
             return Response({"error": "Recommendation not found."}, status=status.HTTP_404_NOT_FOUND)
 
         if not force:
-            cached = AutoFixJob.objects.filter(
-                analysis_run=run,
-                recommendation=rec,
-                status=AutoFixJob.Status.PREVIEW,
-            ).order_by("-created_at").first()
+            cached = (
+                AutoFixJob.objects.filter(
+                    analysis_run=run,
+                    recommendation=rec,
+                    status=AutoFixJob.Status.PREVIEW,
+                )
+                .order_by("-created_at")
+                .first()
+            )
             if cached and cached.response_data:
                 return Response({**cached.response_data, "cached": True})
 
@@ -2943,19 +2958,19 @@ class AutoFixPreviewView(APIView):
                 },
             )
         except Exception:
-            logger.exception(
-                "Failed to persist AutoFixJob preview (run=%s rec=%s)", run.id, rec.id
-            )
+            logger.exception("Failed to persist AutoFixJob preview (run=%s rec=%s)", run.id, rec.id)
         return Response({**preview, "cached": False})
 
 
 class AutoFixApproveView(APIView):
     """POST /api/analyzer/runs/s/<slug>/auto-fix/approve/ — apply a previewed fix via plugin."""
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .auto_fix import apply_approved_fix
         from .models import AutoFixJob
 
@@ -2972,6 +2987,7 @@ class AutoFixApproveView(APIView):
             return Response({"error": "No organization linked."}, status=status.HTTP_400_BAD_REQUEST)
 
         from .integration_resolve import resolve_store_integration_for_run
+
         integration = resolve_store_integration_for_run(org, run.url or "")
 
         if not integration:
@@ -2988,11 +3004,7 @@ class AutoFixApproveView(APIView):
         raw_status = result.get("status") or "failed"
         allowed = {s.value for s in AutoFixJob.Status}
         job_status = raw_status if raw_status in allowed else "failed"
-        err_msg = (
-            result.get("message", "")
-            if raw_status in ("failed", "error", "skipped")
-            else ""
-        )
+        err_msg = result.get("message", "") if raw_status in ("failed", "error", "skipped") else ""
         try:
             AutoFixJob.objects.create(
                 analysis_run=run,
@@ -3015,11 +3027,13 @@ class AutoFixApproveView(APIView):
 
 class AutoFixVerifyView(APIView):
     """POST /api/analyzer/runs/s/<slug>/auto-fix/verify/ — re-fetch the page and verify the fix heuristically."""
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import AutoFixJob
         from .recommendation_verify import verify_recommendation_fix
 
@@ -3050,9 +3064,7 @@ class AutoFixVerifyView(APIView):
                 fix_type=result.get("fix_type") or "verification",
                 status=job_status,
                 response_data=result,
-                error_message=""
-                if st == "verified"
-                else (result.get("message") or "")[:500],
+                error_message="" if st == "verified" else (result.get("message") or "")[:500],
             )
         except Exception:
             logger.exception("Failed to create verify record (run=%s rec=%s)", run.id, rec.id)
@@ -3069,6 +3081,7 @@ class AutoFixVerifyView(APIView):
 
 # ── AI Chat (GEO Assistant with analysis context) ────────────────────────────
 
+
 class AiChatView(APIView):
     """
     GET  /api/analyzer/runs/s/<slug>/chat/ — return persisted chat history.
@@ -3078,36 +3091,39 @@ class AiChatView(APIView):
     need to round-trip the conversation. Sending `history` in the body is
     ignored unless the run has zero saved messages (legacy migration aid).
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [AiChatThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import ChatMessage
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         msgs = ChatMessage.objects.filter(analysis_run=run).order_by("created_at")
-        return Response({
-            "messages": [
-                {
-                    "role": m.role,
-                    "content": m.content,
-                    "created_at": m.created_at.isoformat(),
-                }
-                for m in msgs
-            ]
-        })
+        return Response(
+            {
+                "messages": [
+                    {
+                        "role": m.role,
+                        "content": m.content,
+                        "created_at": m.created_at.isoformat(),
+                    }
+                    for m in msgs
+                ]
+            }
+        )
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import ChatMessage
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         message = request.data.get("message", "").strip()
         # Pull persisted history; fall back to client-sent on first ever message.
-        persisted = list(
-            ChatMessage.objects.filter(analysis_run=run).order_by("created_at")
-        )
+        persisted = list(ChatMessage.objects.filter(analysis_run=run).order_by("created_at"))
         if persisted:
             history = [{"role": m.role, "content": m.content} for m in persisted]
         else:
@@ -3118,27 +3134,22 @@ class AiChatView(APIView):
 
         # Build context from THIS run's stored data only — no re-crawling
         page_score = run.page_scores.filter(url=run.url).first()
-        all_page_scores = list(run.page_scores.all().values("url", "content_score", "schema_score", "eeat_score", "technical_score"))
+        all_page_scores = list(
+            run.page_scores.all().values(
+                "url", "content_score", "schema_score", "eeat_score", "technical_score"
+            )
+        )
         recs = list(run.recommendations.values_list("title", "priority", "pillar", "description")[:15])
 
         # Extract brand info from stored analysis details
-        meta_desc = ""
-        page_title = ""
         word_count = 0
         site_discovery = {}
 
         if page_score and page_score.content_details:
             checks = page_score.content_details.get("checks", {})
-            intent = checks.get("intent_clarity", {})
             coverage = checks.get("coverage_depth", {})
             word_count = checks.get("word_count", coverage.get("word_count", 0))
             site_discovery = checks.get("site_discovery", {})
-            meta_desc = intent.get("has_meta_description", "")
-
-        if page_score and page_score.technical_details:
-            tech_checks = page_score.technical_details.get("checks", {})
-            infra = tech_checks.get("infrastructure", {})
-            ai_read = tech_checks.get("ai_readability", {})
 
         # Build context
         brand = run.brand_name or run.url
@@ -3149,52 +3160,64 @@ class AiChatView(APIView):
         ]
 
         if site_discovery:
-            context_parts.append(f"Site structure: {site_discovery.get('products', 0)} products, "
-                                 f"{site_discovery.get('collections', 0)} collections, "
-                                 f"{site_discovery.get('pages', 0)} pages, "
-                                 f"{site_discovery.get('blog_posts', 0)} blog posts")
+            context_parts.append(
+                f"Site structure: {site_discovery.get('products', 0)} products, "
+                f"{site_discovery.get('collections', 0)} collections, "
+                f"{site_discovery.get('pages', 0)} pages, "
+                f"{site_discovery.get('blog_posts', 0)} blog posts"
+            )
 
-        context_parts.append(f"\n--- EXACT SCORES (from this analysis) ---")
+        context_parts.append("\n--- EXACT SCORES (from this analysis) ---")
         context_parts.append(f"Overall GEO Score: {round(run.composite_score, 1)}/100")
 
         if page_score:
-            context_parts.extend([
-                f"Technical: {round(page_score.technical_score, 1)}/100",
-                f"Schema: {round(page_score.schema_score, 1)}/100",
-                f"Content: {round(page_score.content_score, 1)}/100",
-                f"E-E-A-T: {round(page_score.eeat_score, 1)}/100",
-                f"Entity: {round(page_score.entity_score, 1)}/100",
-                f"AI Visibility: {round(page_score.ai_visibility_score, 1)}/100",
-            ])
+            context_parts.extend(
+                [
+                    f"Technical: {round(page_score.technical_score, 1)}/100",
+                    f"Schema: {round(page_score.schema_score, 1)}/100",
+                    f"Content: {round(page_score.content_score, 1)}/100",
+                    f"E-E-A-T: {round(page_score.eeat_score, 1)}/100",
+                    f"Entity: {round(page_score.entity_score, 1)}/100",
+                    f"AI Visibility: {round(page_score.ai_visibility_score, 1)}/100",
+                ]
+            )
 
             # Add detail breakdowns if available
             if page_score.content_details and page_score.content_details.get("checks"):
                 cc = page_score.content_details["checks"]
-                context_parts.append(f"\nContent breakdown: intent={cc.get('intent_score', '?')}, "
-                                     f"coverage={cc.get('coverage_score', '?')}, "
-                                     f"density={cc.get('density_score', '?')}, "
-                                     f"structure={cc.get('structure_score', '?')}")
+                context_parts.append(
+                    f"\nContent breakdown: intent={cc.get('intent_score', '?')}, "
+                    f"coverage={cc.get('coverage_score', '?')}, "
+                    f"density={cc.get('density_score', '?')}, "
+                    f"structure={cc.get('structure_score', '?')}"
+                )
 
             if page_score.eeat_details and page_score.eeat_details.get("checks"):
                 ec = page_score.eeat_details["checks"]
-                context_parts.append(f"E-E-A-T breakdown: identity={ec.get('identity_score', '?')}, "
-                                     f"evidence={ec.get('evidence_score', '?')}, "
-                                     f"experience={ec.get('experience_score', '?')}, "
-                                     f"trust={ec.get('trust_score', '?')}")
+                context_parts.append(
+                    f"E-E-A-T breakdown: identity={ec.get('identity_score', '?')}, "
+                    f"evidence={ec.get('evidence_score', '?')}, "
+                    f"experience={ec.get('experience_score', '?')}, "
+                    f"trust={ec.get('trust_score', '?')}"
+                )
 
             if page_score.technical_details and page_score.technical_details.get("checks"):
                 tc = page_score.technical_details["checks"]
-                context_parts.append(f"Technical breakdown: infra={tc.get('infra_score', '?')}, "
-                                     f"perf={tc.get('perf_score', '?')}, "
-                                     f"crawl={tc.get('crawl_score', '?')}, "
-                                     f"ai_read={tc.get('ai_read_score', '?')}, "
-                                     f"struct={tc.get('struct_score', '?')}")
+                context_parts.append(
+                    f"Technical breakdown: infra={tc.get('infra_score', '?')}, "
+                    f"perf={tc.get('perf_score', '?')}, "
+                    f"crawl={tc.get('crawl_score', '?')}, "
+                    f"ai_read={tc.get('ai_read_score', '?')}, "
+                    f"struct={tc.get('struct_score', '?')}"
+                )
 
         if len(all_page_scores) > 1:
             context_parts.append(f"\nPages analyzed: {len(all_page_scores)}")
             for ps in all_page_scores[:5]:
-                context_parts.append(f"  - {ps['url']}: content={round(ps['content_score'],1)}, "
-                                     f"schema={round(ps['schema_score'],1)}, eeat={round(ps['eeat_score'],1)}")
+                context_parts.append(
+                    f"  - {ps['url']}: content={round(ps['content_score'], 1)}, "
+                    f"schema={round(ps['schema_score'], 1)}, eeat={round(ps['eeat_score'], 1)}"
+                )
 
         if recs:
             context_parts.append("\nRecommendations:")
@@ -3249,13 +3272,12 @@ RESPONSE FORMAT RULES:
         messages.append({"role": "user", "content": message})
 
         # Persist the user message before invoking the LLM so it survives errors.
-        ChatMessage.objects.create(
-            analysis_run=run, role=ChatMessage.Role.USER, content=message
-        )
+        ChatMessage.objects.create(analysis_run=run, role=ChatMessage.Role.USER, content=message)
 
         # Call Gemini via the LLM pipeline
         try:
             from .pipeline.llm import ask_llm
+
             # Build a single prompt with conversation context
             conv = ""
             for m in messages:
@@ -3273,20 +3295,17 @@ RESPONSE FORMAT RULES:
                 reply = "I'm having trouble connecting right now. Please try again in a moment."
 
             reply_text = reply.strip()
-            ChatMessage.objects.create(
-                analysis_run=run, role=ChatMessage.Role.ASSISTANT, content=reply_text
-            )
+            ChatMessage.objects.create(analysis_run=run, role=ChatMessage.Role.ASSISTANT, content=reply_text)
             return Response({"reply": reply_text})
         except Exception as exc:
             logger.warning("AI Chat failed: %s", exc)
             fallback = "Sorry, I couldn't process that right now. Please try again."
-            ChatMessage.objects.create(
-                analysis_run=run, role=ChatMessage.Role.ASSISTANT, content=fallback
-            )
+            ChatMessage.objects.create(analysis_run=run, role=ChatMessage.Role.ASSISTANT, content=fallback)
             return Response({"reply": fallback})
 
 
 # ── GEO improvements (fix plan + apply) ─────────────────────────────────────
+
 
 class GeoImprovementsView(APIView):
     """GET /api/analyzer/runs/s/<slug>/geo-improvements/"""
@@ -3388,16 +3407,18 @@ class ApplyGeoFixesAndReanalyzeView(APIView):
 # Sitemap audit
 # ============================================================================
 
+
 class SitemapAuditStartView(APIView):
     """POST /runs/s/<slug>/sitemap/  — kick off an async sitemap audit."""
+
     permission_classes = [AllowAny]
     throttle_classes = [AuditStartThrottle]
 
     def post(self, request, slug):
-        import threading
         from django.shortcuts import get_object_or_404
+
         from .models import SitemapAudit
-        from .pipeline.sitemap_audit import run_sitemap_audit, HARD_URL_CAP
+        from .pipeline.sitemap_audit import HARD_URL_CAP, run_sitemap_audit
         from .serializers import SitemapAuditSerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -3408,6 +3429,7 @@ class SitemapAuditStartView(APIView):
         )
 
         from ._thread_safety import run_in_background_with_status
+
         run_in_background_with_status(
             model_cls=SitemapAudit,
             instance_id=audit.id,
@@ -3425,6 +3447,7 @@ class SitemapAuditStartView(APIView):
 
 class SitemapAuditDetailView(APIView):
     """GET /runs/s/<slug>/sitemap/  — latest audit summary + paginated pages."""
+
     permission_classes = [AllowAny]
 
     ALLOWED_SORTS = {
@@ -3446,13 +3469,12 @@ class SitemapAuditDetailView(APIView):
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import SitemapAudit
-        from .serializers import SitemapAuditSerializer, SitemapAuditPageSerializer
+        from .serializers import SitemapAuditPageSerializer, SitemapAuditSerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
-        audit = (
-            SitemapAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
-        )
+        audit = SitemapAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
         if audit is None:
             return Response({"audit": None, "pages": [], "total": 0})
 
@@ -3477,49 +3499,67 @@ class SitemapAuditDetailView(APIView):
         except ValueError:
             page_size, page = 50, 1
         start_idx = (page - 1) * page_size
-        rows = list(qs[start_idx:start_idx + page_size])
+        rows = list(qs[start_idx : start_idx + page_size])
 
-        return Response({
-            "audit": SitemapAuditSerializer(audit).data,
-            "pages": SitemapAuditPageSerializer(rows, many=True).data,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        })
+        return Response(
+            {
+                "audit": SitemapAuditSerializer(audit).data,
+                "pages": SitemapAuditPageSerializer(rows, many=True).data,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
 
 
 class AgentLogView(APIView):
     """GET /runs/s/<slug>/agent-log/  — stub; returns empty entries + integration slots."""
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import AgentLogEntry
         from .serializers import AgentLogEntrySerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         entries = AgentLogEntry.objects.filter(analysis_run=run).order_by("-ts")[:100]
-        return Response({
-            "entries": AgentLogEntrySerializer(entries, many=True).data,
-            "integrations": [
-                {"name": "Cloudflare Logpush", "key": "cloudflare", "connected": False, "status": "coming_soon"},
-                {"name": "Vercel Edge Logs", "key": "vercel", "connected": False, "status": "coming_soon"},
-            ],
-        })
+        return Response(
+            {
+                "entries": AgentLogEntrySerializer(entries, many=True).data,
+                "integrations": [
+                    {
+                        "name": "Cloudflare Logpush",
+                        "key": "cloudflare",
+                        "connected": False,
+                        "status": "coming_soon",
+                    },
+                    {
+                        "name": "Vercel Edge Logs",
+                        "key": "vercel",
+                        "connected": False,
+                        "status": "coming_soon",
+                    },
+                ],
+            }
+        )
 
 
 # ============================================================================
 # Schema Watchtower
 # ============================================================================
 
+
 class SchemaWatchStartView(APIView):
     """POST /runs/s/<slug>/schema-watch/  — kick off a schema validation run."""
+
     permission_classes = [AllowAny]
     throttle_classes = [AuditStartThrottle]
 
     def post(self, request, slug):
-        import threading
         from django.shortcuts import get_object_or_404
+
         from .models import SchemaWatch
         from .pipeline.schema_watch import run_schema_watch
         from .serializers import SchemaWatchSerializer
@@ -3531,6 +3571,7 @@ class SchemaWatchStartView(APIView):
         )
 
         from ._thread_safety import run_in_background_with_status
+
         run_in_background_with_status(
             model_cls=SchemaWatch,
             instance_id=watch.id,
@@ -3548,17 +3589,17 @@ class SchemaWatchStartView(APIView):
 
 class SchemaWatchDetailView(APIView):
     """GET /runs/s/<slug>/schema-watch/  — latest watch summary + pages."""
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import SchemaWatch
-        from .serializers import SchemaWatchSerializer, SchemaWatchPageSerializer
+        from .serializers import SchemaWatchPageSerializer, SchemaWatchSerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
-        watch = (
-            SchemaWatch.objects.filter(analysis_run=run).order_by("-created_at").first()
-        )
+        watch = SchemaWatch.objects.filter(analysis_run=run).order_by("-created_at").first()
         if watch is None:
             return Response({"watch": None, "pages": [], "total": 0})
 
@@ -3585,40 +3626,43 @@ class SchemaWatchDetailView(APIView):
         except ValueError:
             page_size, page = 100, 1
         start_idx = (page - 1) * page_size
-        rows = list(qs[start_idx:start_idx + page_size])
+        rows = list(qs[start_idx : start_idx + page_size])
 
-        return Response({
-            "watch": SchemaWatchSerializer(watch).data,
-            "pages": SchemaWatchPageSerializer(rows, many=True).data,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        })
+        return Response(
+            {
+                "watch": SchemaWatchSerializer(watch).data,
+                "pages": SchemaWatchPageSerializer(rows, many=True).data,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
 
 
 class RankAuditStartView(APIView):
     """POST /runs/s/<slug>/rank/start/ — kick off an async rank audit."""
+
     permission_classes = [AllowAny]
     throttle_classes = [AuditStartThrottle]
 
     def post(self, request, slug):
-        import threading
         from django.shortcuts import get_object_or_404
+
         from .models import RankAudit
         from .pipeline.rank_tracker import run_rank_audit
         from .serializers import RankAuditSerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
 
-        already = (
-            RankAudit.objects
-            .filter(analysis_run=run, status__in=[RankAudit.Status.QUEUED, RankAudit.Status.RUNNING])
-            .first()
-        )
+        already = RankAudit.objects.filter(
+            analysis_run=run, status__in=[RankAudit.Status.QUEUED, RankAudit.Status.RUNNING]
+        ).first()
         if already is not None:
             return Response(
-                {"detail": "An audit is already running for this run.",
-                 "audit": RankAuditSerializer(already).data},
+                {
+                    "detail": "An audit is already running for this run.",
+                    "audit": RankAuditSerializer(already).data,
+                },
                 status=status.HTTP_409_CONFLICT,
             )
 
@@ -3628,6 +3672,7 @@ class RankAuditStartView(APIView):
         )
 
         from ._thread_safety import run_in_background_with_status
+
         run_in_background_with_status(
             model_cls=RankAudit,
             instance_id=audit.id,
@@ -3645,17 +3690,17 @@ class RankAuditStartView(APIView):
 
 class RankAuditDetailView(APIView):
     """GET /runs/s/<slug>/rank/ — latest audit summary + queries + their results."""
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import RankAudit
-        from .serializers import RankAuditSerializer, RankQuerySerializer
+        from .serializers import RankAuditSerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
-        audit = (
-            RankAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
-        )
+        audit = RankAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
         if audit is None:
             return Response({"audit": None, "queries": []})
 
@@ -3677,7 +3722,6 @@ class RankAuditDetailView(APIView):
 
         queries = list(queries_qs.order_by("rank", "id"))
 
-        data = []
         for q in queries:
             results = list(q.results.all())
             if surface:
@@ -3719,28 +3763,29 @@ class RankAuditDetailView(APIView):
             }
             serialized.append(payload)
 
-        return Response({
-            "audit": RankAuditSerializer(audit).data,
-            "queries": serialized,
-        })
+        return Response(
+            {
+                "audit": RankAuditSerializer(audit).data,
+                "queries": serialized,
+            }
+        )
 
 
 class RankAuditRefreshQueryView(APIView):
     """POST /runs/s/<slug>/rank/query/<query_id>/refresh/ — re-fetch one query across all surfaces."""
+
     permission_classes = [AllowAny]
     throttle_classes = [AuditStartThrottle]
 
     def post(self, request, slug, query_id):
-        import threading
         from django.shortcuts import get_object_or_404
+
         from .models import RankAudit, RankQuery, RankResult
         from .pipeline.rank_tracker import audit_query
         from .serializers import RankQuerySerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
-        audit = (
-            RankAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
-        )
+        audit = RankAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
         if audit is None:
             return Response({"detail": "No audit exists for this run."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -3753,7 +3798,9 @@ class RankAuditRefreshQueryView(APIView):
         query.save(update_fields=["status", "brand_mention_count", "error_message"])
 
         from urllib.parse import urlparse as _urlparse
+
         from .pipeline.rank_tracker import _derive_geo
+
         brand_names = [n for n in (run.brand_name,) if n]
         try:
             brand_domain = _urlparse(run.url or "").netloc.lower().replace("www.", "")
@@ -3762,12 +3809,10 @@ class RankAuditRefreshQueryView(APIView):
         if brand_domain:
             brand_names.append(brand_domain)
         try:
-            competitor_names = [
-                c for c in run.competitors.values_list("name", flat=True) if c
-            ]
+            competitor_names = [c for c in run.competitors.values_list("name", flat=True) if c]
         except Exception:
             competitor_names = []
-        gl = (_derive_geo(run).get("gl") or "")
+        gl = _derive_geo(run).get("gl") or ""
 
         from ._thread_safety import run_in_background_with_status
         from .models import RankQuery as _RQ
@@ -3797,12 +3842,12 @@ class PromptRankView(APIView):
     only the web-surface fetchers synchronously so the prompt expands with
     real data the first time it's opened.
     """
+
     permission_classes = [AllowAny]
 
     def _serialize(self, query):
         results = list(
-            query.results.filter(surface__in=["google", "reddit", "quora"])
-            .order_by("surface", "position")
+            query.results.filter(surface__in=["google", "reddit", "quora"]).order_by("surface", "position")
         )
         return {
             "id": query.id,
@@ -3835,11 +3880,8 @@ class PromptRankView(APIView):
 
     def _ensure_audit(self, run):
         from .models import RankAudit
-        audit = (
-            RankAudit.objects.filter(analysis_run=run)
-            .order_by("-created_at")
-            .first()
-        )
+
+        audit = RankAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
         if audit is None:
             audit = RankAudit.objects.create(
                 analysis_run=run,
@@ -3849,18 +3891,12 @@ class PromptRankView(APIView):
 
     def _get_or_create_query(self, audit, prompt_text):
         from django.db.models import Max
+
         from .models import RankQuery
-        query = (
-            RankQuery.objects.filter(audit=audit, prompt_text=prompt_text)
-            .order_by("-id")
-            .first()
-        )
+
+        query = RankQuery.objects.filter(audit=audit, prompt_text=prompt_text).order_by("-id").first()
         if query is None:
-            next_rank = (
-                (RankQuery.objects.filter(audit=audit).aggregate(
-                    m=Max("rank")
-                )["m"] or 0) + 1
-            )
+            next_rank = (RankQuery.objects.filter(audit=audit).aggregate(m=Max("rank"))["m"] or 0) + 1
             query = RankQuery.objects.create(
                 audit=audit,
                 prompt_text=prompt_text,
@@ -3871,15 +3907,16 @@ class PromptRankView(APIView):
 
     def _run_web_fetch(self, query, run):
         from urllib.parse import urlparse as _urlparse
+
+        from .models import RankQuery, RankResult
         from .pipeline.rank_tracker import (
-            fetch_serper,
-            fetch_reddit,
-            fetch_quora,
-            detect_brand_mentions,
-            compute_sentiment,
             _derive_geo,
+            compute_sentiment,
+            detect_brand_mentions,
+            fetch_quora,
+            fetch_reddit,
+            fetch_serper,
         )
-        from .models import RankResult, RankQuery
 
         brand_names = [n for n in (run.brand_name,) if n]
         try:
@@ -3889,17 +3926,13 @@ class PromptRankView(APIView):
         if brand_domain:
             brand_names.append(brand_domain)
         try:
-            competitor_names = [
-                c for c in run.competitors.values_list("name", flat=True) if c
-            ]
+            competitor_names = [c for c in run.competitors.values_list("name", flat=True) if c]
         except Exception:
             competitor_names = []
-        gl = (_derive_geo(run).get("gl") or "")
+        gl = _derive_geo(run).get("gl") or ""
 
         # Clear any prior web-surface results so re-runs don't pile up.
-        RankResult.objects.filter(
-            query=query, surface__in=["google", "reddit", "quora"]
-        ).delete()
+        RankResult.objects.filter(query=query, surface__in=["google", "reddit", "quora"]).delete()
 
         fetchers = (
             ("google", lambda q: fetch_serper(q, gl=gl)),
@@ -3915,7 +3948,9 @@ class PromptRankView(APIView):
             except Exception as exc:
                 logger.warning(
                     "PromptRankView surface=%s prompt=%r error: %s",
-                    surface, query.prompt_text[:80], exc,
+                    surface,
+                    query.prompt_text[:80],
+                    exc,
                 )
                 rows = []
             # Keep only the top 3 per surface — that's all we display.
@@ -3933,9 +3968,7 @@ class PromptRankView(APIView):
                 )
                 if is_brand:
                     brand_hits += 1
-                sentiment = compute_sentiment(
-                    f"{row.get('title') or ''} {snippet}"
-                )
+                sentiment = compute_sentiment(f"{row.get('title') or ''} {snippet}")
                 to_create.append(
                     RankResult(
                         query=query,
@@ -3965,6 +3998,7 @@ class PromptRankView(APIView):
 
     def _resolve(self, slug, track_id, *, force_refresh=False):
         from django.shortcuts import get_object_or_404
+
         from .models import PromptTrack
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -3980,9 +4014,7 @@ class PromptRankView(APIView):
         audit = self._ensure_audit(run)
         query = self._get_or_create_query(audit, prompt_text)
 
-        has_web_results = query.results.filter(
-            surface__in=["google", "reddit", "quora"]
-        ).exists()
+        has_web_results = query.results.filter(surface__in=["google", "reddit", "quora"]).exists()
 
         if force_refresh or not has_web_results:
             try:
@@ -4067,11 +4099,13 @@ class BacklinkCatalogView(APIView):
     provider on first call (when the cache is empty) so the UI never sees an
     empty list.
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
-        from .models import BacklinkProvider, BacklinkProduct
+
+        from .models import BacklinkProduct, BacklinkProvider
 
         # We don't strictly need the run — catalog is global — but checking the
         # slug exists keeps the URL shape consistent with the rest of the API.
@@ -4086,9 +4120,7 @@ class BacklinkCatalogView(APIView):
                 self._refresh_provider_catalog(provider)
 
         # Optional filters: ?link_type=guest_post&min_da=70&niche=tech
-        qs = BacklinkProduct.objects.select_related("provider").filter(
-            provider__is_enabled=True
-        )
+        qs = BacklinkProduct.objects.select_related("provider").filter(provider__is_enabled=True)
         link_type = request.GET.get("link_type")
         if link_type:
             qs = qs.filter(link_type=link_type)
@@ -4102,17 +4134,17 @@ class BacklinkCatalogView(APIView):
         if niche:
             qs = qs.filter(niche_tags__contains=[niche])
 
-        return Response({
-            "providers": [
-                {"slug": p.slug, "display_name": p.display_name}
-                for p in providers
-            ],
-            "products": [_serialize_product(p) for p in qs[:200]],
-        })
+        return Response(
+            {
+                "providers": [{"slug": p.slug, "display_name": p.display_name} for p in providers],
+                "products": [_serialize_product(p) for p in qs[:200]],
+            }
+        )
 
     @staticmethod
     def _seed_default_providers():
         from .models import BacklinkProvider
+
         BacklinkProvider.objects.get_or_create(
             slug="fatjoe",
             defaults={
@@ -4136,6 +4168,7 @@ class BacklinkCatalogView(APIView):
     def _refresh_provider_catalog(provider):
         """Pull current catalog from the provider and upsert into BacklinkProduct."""
         from apps.integrations.services.backlink_providers import get_client
+
         from .models import BacklinkProduct
 
         try:
@@ -4144,7 +4177,8 @@ class BacklinkCatalogView(APIView):
         except Exception as exc:
             logger.warning(
                 "BacklinkCatalogView: failed to refresh %s catalog: %s",
-                provider.slug, exc,
+                provider.slug,
+                exc,
             )
             return
 
@@ -4187,16 +4221,17 @@ class BacklinkOrderListCreateView(APIView):
         "user_email": str
       }
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import BacklinkOrder
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         qs = (
-            BacklinkOrder.objects
-            .filter(analysis_run=run)
+            BacklinkOrder.objects.filter(analysis_run=run)
             .select_related("provider", "product")
             .order_by("-created_at")
         )
@@ -4207,7 +4242,8 @@ class BacklinkOrderListCreateView(APIView):
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
-        from .models import BacklinkProduct, BacklinkOrder, PromptTrack
+
+        from .models import BacklinkOrder, BacklinkProduct, PromptTrack
 
         run = get_object_or_404(AnalysisRun, slug=slug)
 
@@ -4219,12 +4255,14 @@ class BacklinkOrderListCreateView(APIView):
         notes = (request.data.get("notes") or "").strip()
 
         missing = [
-            field for field, value in [
+            field
+            for field, value in [
                 ("product_id", product_id),
                 ("target_url", target_url),
                 ("anchor_text", anchor_text),
                 ("user_email", user_email),
-            ] if not value
+            ]
+            if not value
         ]
         if missing:
             return Response(
@@ -4233,9 +4271,7 @@ class BacklinkOrderListCreateView(APIView):
             )
 
         try:
-            product = BacklinkProduct.objects.select_related("provider").get(
-                id=int(product_id)
-            )
+            product = BacklinkProduct.objects.select_related("provider").get(id=int(product_id))
         except (BacklinkProduct.DoesNotExist, TypeError, ValueError):
             return Response(
                 {"detail": "Unknown product_id."},
@@ -4245,9 +4281,7 @@ class BacklinkOrderListCreateView(APIView):
         prompt_track = None
         if track_id is not None:
             try:
-                prompt_track = PromptTrack.objects.get(
-                    id=int(track_id), analysis_run=run
-                )
+                prompt_track = PromptTrack.objects.get(id=int(track_id), analysis_run=run)
             except (PromptTrack.DoesNotExist, TypeError, ValueError):
                 prompt_track = None
 
@@ -4290,20 +4324,24 @@ class BacklinkOrderDetailView(APIView):
     GET  /runs/s/<slug>/backlinks/orders/<int:order_id>/  — refresh status
     POST /runs/s/<slug>/backlinks/orders/<int:order_id>/  — manual sync poll
     """
+
     permission_classes = [AllowAny]
 
     def _get_order(self, slug, order_id):
         from django.shortcuts import get_object_or_404
+
         from .models import BacklinkOrder
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         return get_object_or_404(
             BacklinkOrder.objects.select_related("provider", "product"),
-            id=order_id, analysis_run=run,
+            id=order_id,
+            analysis_run=run,
         )
 
     def _poll(self, order):
         from apps.integrations.services.backlink_providers import get_client
+
         from .models import BacklinkOrder
 
         if not order.provider_order_id:
@@ -4328,9 +4366,7 @@ class BacklinkOrderDetailView(APIView):
                 order.delivered_at = timezone.now()
             if res.error_message:
                 order.error_message = res.error_message[:1000]
-            order.save(update_fields=[
-                "status", "proof_url", "delivered_at", "error_message"
-            ])
+            order.save(update_fields=["status", "proof_url", "delivered_at", "error_message"])
         return order
 
     def get(self, request, slug, order_id):
@@ -4383,17 +4419,21 @@ class BacklinkOrderConfirmPaymentView(APIView):
     a successful Stripe payment intent; for now it acts as a mock-checkout
     confirmation that releases the order to the provider.
     """
+
     permission_classes = [AllowAny]
 
     def post(self, request, slug, order_id):
         from django.shortcuts import get_object_or_404
-        from .models import BacklinkOrder
+
         from apps.integrations.services.backlink_providers import get_client
+
+        from .models import BacklinkOrder
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         order = get_object_or_404(
             BacklinkOrder.objects.select_related("provider", "product"),
-            id=order_id, analysis_run=run,
+            id=order_id,
+            analysis_run=run,
         )
 
         if order.status != BacklinkOrder.Status.PENDING_PAYMENT:
@@ -4424,9 +4464,7 @@ class BacklinkOrderConfirmPaymentView(APIView):
         order.ordered_at = timezone.now()
         if payment_intent_id:
             order.payment_intent_id = payment_intent_id[:120]
-        order.save(update_fields=[
-            "status", "provider_order_id", "ordered_at", "payment_intent_id"
-        ])
+        order.save(update_fields=["status", "provider_order_id", "ordered_at", "payment_intent_id"])
 
         return Response(_serialize_order(order))
 
@@ -4448,27 +4486,29 @@ class PromptWikipediaDraftView(APIView):
         Generates and persists the Wikipedia kit. Returns the cached version
         if one exists and force is false.
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug, track_id):
         from django.shortcuts import get_object_or_404
+
         from .models import PromptTrack, PromptWikipediaDraft
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         track = get_object_or_404(PromptTrack, id=track_id, analysis_run=run)
         existing = PromptWikipediaDraft.objects.filter(prompt_track=track).first()
         if not existing:
-            return Response(
-                {"detail": "No saved draft yet."}, status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({"detail": "No saved draft yet."}, status=status.HTTP_404_NOT_FOUND)
         return Response({**existing.payload, "cached": True})
 
     def post(self, request, slug, track_id):
-        from django.shortcuts import get_object_or_404
-        from .models import PromptTrack, PromptWikipediaDraft
-        from .pipeline.llm import ask_llm
         import json
         import re
+
+        from django.shortcuts import get_object_or_404
+
+        from .models import PromptTrack, PromptWikipediaDraft
+        from .pipeline.llm import ask_llm
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         track = get_object_or_404(PromptTrack, id=track_id, analysis_run=run)
@@ -4485,9 +4525,7 @@ class PromptWikipediaDraftView(APIView):
 
         # Pull a few signals from existing data the LLM can ground the draft on.
         try:
-            competitors = list(
-                run.competitors.values_list("name", flat=True)[:5]
-            )
+            competitors = list(run.competitors.values_list("name", flat=True)[:5])
         except Exception:
             competitors = []
 
@@ -4532,7 +4570,7 @@ Return ONLY valid JSON. No markdown fences. Schema:
       "founded": "Year if known, else 'TBD'",
       "headquarters": "City, Country if known",
       "industry": "Industry name",
-      "website": "{url or 'TBD'}"
+      "website": "{url or "TBD"}"
     }},
     "references_markdown": "1. Citation 1 source.\\n2. Citation 2 source.\\n3. ..."
   }},
@@ -4576,7 +4614,12 @@ Return ONLY valid JSON. No markdown fences. Schema:
                     pass
 
         if payload is None:
-            logger.warning("Wikipedia draft JSON parse failed for slug=%s track=%s. Raw: %s", slug, track_id, cleaned[:300])
+            logger.warning(
+                "Wikipedia draft JSON parse failed for slug=%s track=%s. Raw: %s",
+                slug,
+                track_id,
+                cleaned[:300],
+            )
             return Response(
                 {
                     "detail": "The AI returned an unexpected response. Please retry.",
@@ -4584,9 +4627,7 @@ Return ONLY valid JSON. No markdown fences. Schema:
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        PromptWikipediaDraft.objects.update_or_create(
-            prompt_track=track, defaults={"payload": payload}
-        )
+        PromptWikipediaDraft.objects.update_or_create(prompt_track=track, defaults={"payload": payload})
 
         return Response({**payload, "cached": False})
 
@@ -4603,34 +4644,40 @@ class PromptSchemaView(APIView):
         false, it is returned without re-calling the LLM. Set force=true to
         regenerate.
     """
+
     permission_classes = [AllowAny]
 
     SCHEMA_TYPES = {"faq", "article", "person", "organization", "answer"}
 
     def get(self, request, slug, track_id):
         from django.shortcuts import get_object_or_404
-        from .models import PromptTrack, PromptSchemaArtifact
+
+        from .models import PromptSchemaArtifact, PromptTrack
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         track = get_object_or_404(PromptTrack, id=track_id, analysis_run=run)
         artifacts = PromptSchemaArtifact.objects.filter(prompt_track=track)
-        return Response({
-            "artifacts": [
-                {
-                    "schema_type": a.schema_type,
-                    "output": a.output,
-                    "explanation": a.explanation,
-                    "updated_at": a.updated_at.isoformat() if a.updated_at else None,
-                }
-                for a in artifacts
-            ]
-        })
+        return Response(
+            {
+                "artifacts": [
+                    {
+                        "schema_type": a.schema_type,
+                        "output": a.output,
+                        "explanation": a.explanation,
+                        "updated_at": a.updated_at.isoformat() if a.updated_at else None,
+                    }
+                    for a in artifacts
+                ]
+            }
+        )
 
     def post(self, request, slug, track_id):
-        from django.shortcuts import get_object_or_404
-        from .models import PromptTrack, PromptSchemaArtifact
-        from .pipeline.llm import ask_llm
         import re
+
+        from django.shortcuts import get_object_or_404
+
+        from .models import PromptSchemaArtifact, PromptTrack
+        from .pipeline.llm import ask_llm
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         track = get_object_or_404(PromptTrack, id=track_id, analysis_run=run)
@@ -4644,16 +4691,16 @@ class PromptSchemaView(APIView):
 
         force = bool(request.data.get("force"))
         if not force:
-            cached = PromptSchemaArtifact.objects.filter(
-                prompt_track=track, schema_type=schema_type
-            ).first()
+            cached = PromptSchemaArtifact.objects.filter(prompt_track=track, schema_type=schema_type).first()
             if cached:
-                return Response({
-                    "schema_type": cached.schema_type,
-                    "output": cached.output,
-                    "explanation": cached.explanation,
-                    "cached": True,
-                })
+                return Response(
+                    {
+                        "schema_type": cached.schema_type,
+                        "output": cached.output,
+                        "explanation": cached.explanation,
+                        "cached": True,
+                    }
+                )
 
         brand = (run.brand_name or "").strip() or "the brand"
         url = (run.url or "").strip() or "https://example.com"
@@ -4741,15 +4788,18 @@ CRITICAL:
             defaults={"output": cleaned, "explanation": explanation},
         )
 
-        return Response({
-            "schema_type": schema_type,
-            "output": cleaned,
-            "explanation": explanation,
-            "cached": False,
-        })
+        return Response(
+            {
+                "schema_type": schema_type,
+                "output": cleaned,
+                "explanation": explanation,
+                "cached": False,
+            }
+        )
 
 
 # ── Content Optimisation (Cursor-style edit + save) ──────────────────────
+
 
 class ContentPagesView(APIView):
     """GET /api/analyzer/runs/s/<slug>/content/pages/
@@ -4758,11 +4808,13 @@ class ContentPagesView(APIView):
     sourced from the latest sitemap audit, with a fallback to the run's
     root URL.
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .services import content_optimisation as co
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -4774,11 +4826,13 @@ class ContentPageFieldsView(APIView):
 
     Returns editable fields + a sandbox-friendly preview HTML for one page.
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .services import content_optimisation as co
 
         url = (request.query_params.get("url") or "").strip()
@@ -4790,10 +4844,7 @@ class ContentPageFieldsView(APIView):
         except co.ContentOptimisationError as exc:
             return Response({"detail": str(exc)}, status=400)
         # Existing AI suggestions on this page (so a refresh restores them)
-        suggestions = [
-            _serialize_content_suggestion(s)
-            for s in co.list_active_suggestions(run, url)
-        ]
+        suggestions = [_serialize_content_suggestion(s) for s in co.list_active_suggestions(run, url)]
         return Response({**fields, "suggestions": suggestions})
 
 
@@ -4803,11 +4854,13 @@ class ContentSuggestionsView(APIView):
     Generates fresh AI suggestions for a page. Persists ContentSuggestion rows
     and returns them. Old PROPOSED suggestions for the same page are dismissed.
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .services import content_optimisation as co
 
         url = (request.data.get("url") or "").strip()
@@ -4818,18 +4871,22 @@ class ContentSuggestionsView(APIView):
             suggestions = co.generate_suggestions(run, url)
         except co.ContentOptimisationError as exc:
             return Response({"detail": str(exc)}, status=400)
-        return Response({
-            "suggestions": [_serialize_content_suggestion(s) for s in suggestions],
-        })
+        return Response(
+            {
+                "suggestions": [_serialize_content_suggestion(s) for s in suggestions],
+            }
+        )
 
 
 class ContentSuggestionDismissView(APIView):
     """POST /api/analyzer/runs/s/<slug>/content/suggestions/<id>/dismiss/"""
+
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]
 
     def post(self, request, slug, suggestion_id):
         from django.shortcuts import get_object_or_404
+
         from .services import content_optimisation as co
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -4848,11 +4905,13 @@ class ContentSaveView(APIView):
     Pushes each provided field to the connected plugin (WP/Shopify) and
     marks any used suggestions as USED. 503 if no integration is connected.
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .services import content_optimisation as co
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -4862,9 +4921,7 @@ class ContentSaveView(APIView):
 
         if not url:
             return Response({"detail": "url is required"}, status=400)
-        if not isinstance(fields, dict) or not any(
-            fields.get(f) is not None for f in co.ALL_FIELDS
-        ):
+        if not isinstance(fields, dict) or not any(fields.get(f) is not None for f in co.ALL_FIELDS):
             return Response({"detail": "fields must include at least one editable field"}, status=400)
 
         # Filter to known fields only
@@ -4912,10 +4969,12 @@ class RunBacklinkFreeView(APIView):
     so reload doesn't re-LLM. The LLM call itself is ~5-15 s; users hit POST
     when they want fresh suggestions.
     """
+
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import BrandKit
         from .pipeline.site_backlink_opportunities import generate_for_run
 
@@ -4932,6 +4991,7 @@ class RunBacklinkFreeView(APIView):
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .models import BrandKit
         from .pipeline.site_backlink_opportunities import generate_for_run
 
@@ -4954,11 +5014,13 @@ class ContentRewriteElementView(APIView):
     Body: {tag, text, instruction?} — ask the LLM to rewrite one element.
     Returns: {new_text}.
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .services import content_optimisation as co
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -4983,11 +5045,13 @@ class ContentApplyElementView(APIView):
     Returns the same shape as ContentSaveView: {saved, failed, plugin_responses}.
     503 if no plugin is connected. 400 if the text can't be located.
     """
+
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
+
         from .services import content_optimisation as co
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -5011,14 +5075,17 @@ class ContentApplyElementView(APIView):
 
 # ── Weekly Email ──────────────────────────────────────────────────────────────
 
+
 class WeeklyTestEmailView(APIView):
     """POST /api/analyzer/runs/s/<slug>/email/weekly-test/
     Sends a weekly analytics email to the given address using live run data."""
+
     permission_classes = [AllowAny]
 
     def post(self, request, slug):
         import datetime
         import urllib.parse
+
         from apps.analyzer.email_utils import send_weekly_email
 
         to_email = request.data.get("email", "").strip()
@@ -5033,7 +5100,11 @@ class WeeklyTestEmailView(APIView):
         def _domain(url: str) -> str:
             try:
                 u = url if url.startswith("http") else f"https://{url}"
-                return urllib.parse.urlparse(u).netloc.lstrip("www.")
+                netloc = urllib.parse.urlparse(u).netloc
+                # .lstrip("www.") strips any combination of those chars
+                # (e.g. "wxample.com" -> "xample.com"); use removeprefix
+                # to match the literal "www." only.
+                return netloc.removeprefix("www.")
             except Exception:
                 return url
 
@@ -5054,8 +5125,10 @@ class WeeklyTestEmailView(APIView):
         )
         brand_vis = getattr(run, "brand_visibility", None)
 
+        from django.db.models import Case, When
+        from django.db.models import IntegerField as DjIntegerField
+
         from .models import SitemapAudit
-        from django.db.models import Case, When, IntegerField as DjIntegerField
 
         def _page_issue(page):
             sc = page.status_code or 0
@@ -5107,13 +5180,15 @@ class WeeklyTestEmailView(APIView):
             for page in raw_pages:
                 sev, title, desc = _page_issue(page)
                 path = page.path or page.url or ""
-                critical_pages.append({
-                    "severity": sev,
-                    "title": title,
-                    "description": desc,
-                    "path": path if len(path) <= 65 else path[:62] + "...",
-                    "url": page.url or "",
-                })
+                critical_pages.append(
+                    {
+                        "severity": sev,
+                        "title": title,
+                        "description": desc,
+                        "path": path if len(path) <= 65 else path[:62] + "...",
+                        "url": page.url or "",
+                    }
+                )
 
         context = {
             "brand_name": run.brand_name or "",
@@ -5135,3 +5210,98 @@ class WeeklyTestEmailView(APIView):
         except Exception:
             logger.exception("WeeklyTestEmailView error for %s slug=%s", to_email, slug)
             return Response({"ok": False, "error": "Email dispatch failed."}, status=500)
+
+
+def _resolve_shopify_integration_for_run(run):
+    """Return the active Shopify Integration tied to the run's organization,
+    or (None, error_response) if there isn't one."""
+    if not run.organization_id:
+        return None, Response({"detail": "Run is not linked to an organization."}, status=400)
+    from apps.integrations.models import Integration
+
+    integ = Integration.objects.filter(
+        organization_id=run.organization_id,
+        provider=Integration.Provider.SHOPIFY,
+        is_active=True,
+    ).first()
+    if not integ:
+        return None, Response(
+            {"detail": "No connected Shopify integration for this run's store."},
+            status=503,
+        )
+    return integ, None
+
+
+class ContentRawFilesListView(APIView):
+    """GET /api/analyzer/runs/s/<slug>/content/raw-files/
+
+    Returns the current state of every supported crawler/AI file on the
+    connected Shopify store. Shape per item:
+
+        {name, label, kind, url, present, content, default_template}
+
+    `kind` is "theme_asset" (robots.txt) or "page" (everything else served
+    at /pages/<handle>).
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.shortcuts import get_object_or_404
+
+        from apps.integrations.services.shopify_raw_files import (
+            RawFileError,
+            list_raw_files,
+        )
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        integ, err = _resolve_shopify_integration_for_run(run)
+        if err:
+            return err
+        try:
+            items = list_raw_files(integ)
+        except RawFileError as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response({"items": items})
+
+
+class ContentRawFileUpsertView(APIView):
+    """PUT /api/analyzer/runs/s/<slug>/content/raw-files/<name>/
+
+    Body: {content: str}. Name is one of: robots, llms, humans, ads.
+
+    For robots.txt the content is written to templates/robots.txt.liquid
+    in the active theme. For the others it's saved as the body_html of a
+    Shopify Page with handle `<name>-txt`, creating the page if missing.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ExpensiveThrottle]
+
+    def put(self, request, slug, name):
+        from django.shortcuts import get_object_or_404
+
+        from apps.integrations.services.shopify_raw_files import (
+            RAW_FILES,
+            RawFileError,
+            upsert_raw_file,
+        )
+
+        if name not in RAW_FILES:
+            return Response(
+                {"detail": f"Unknown raw file '{name}'. Allowed: {list(RAW_FILES)}"},
+                status=400,
+            )
+        content = request.data.get("content")
+        if content is None:
+            return Response({"detail": "content is required"}, status=400)
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        integ, err = _resolve_shopify_integration_for_run(run)
+        if err:
+            return err
+        try:
+            saved = upsert_raw_file(integ, name, content)
+        except RawFileError as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response(saved)
