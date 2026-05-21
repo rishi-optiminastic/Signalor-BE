@@ -82,3 +82,4 @@ opentelemetry-instrumentation-psycopg2==0.50b0
 opentelemetry-instrumentation-requests==0.50b0
 opentelemetry-instrumentation-redis==0.50b0
 opentelemetry-instrumentation-logging==0.50b0
+apscheduler>=3.10,<4

@@ -4992,3 +4992,131 @@ class ContentApplyElementView(APIView):
             status_code = 503 if "integration" in msg.lower() else 400
             return Response({"detail": msg}, status=status_code)
         return Response(result)
+
+
+# ── Weekly Email ──────────────────────────────────────────────────────────────
+
+class WeeklyTestEmailView(APIView):
+    """POST /api/analyzer/runs/s/<slug>/email/weekly-test/
+    Sends a weekly analytics email to the given address using live run data."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        import datetime
+        import urllib.parse
+        from apps.analyzer.email_utils import send_weekly_email
+
+        to_email = request.data.get("email", "").strip()
+        if not to_email:
+            return Response({"error": "email is required."}, status=400)
+
+        try:
+            run = AnalysisRun.objects.get(slug=slug)
+        except AnalysisRun.DoesNotExist:
+            return Response({"error": "Run not found."}, status=404)
+
+        def _domain(url: str) -> str:
+            try:
+                u = url if url.startswith("http") else f"https://{url}"
+                return urllib.parse.urlparse(u).netloc.lstrip("www.")
+            except Exception:
+                return url
+
+        competitors = [
+            {
+                "name": c.name or "",
+                "url": c.url or "",
+                "domain": _domain(c.url or ""),
+                "composite_score": c.composite_score,
+                "relevance_score": c.relevance_score,
+            }
+            for c in run.competitors.order_by("-relevance_score")[:6]
+        ]
+
+        prompts = list(run.prompt_tracks.filter(deleted_at__isnull=True).order_by("-score")[:5])
+        recommendations = list(
+            run.recommendations.filter(priority__in=["critical", "high"]).order_by("priority")[:5]
+        )
+        brand_vis = getattr(run, "brand_visibility", None)
+
+        from .models import SitemapAudit
+        from django.db.models import Case, When, IntegerField as DjIntegerField
+
+        def _page_issue(page):
+            sc = page.status_code or 0
+            if sc >= 500:
+                return ("FAIL", "Server Error", f"HTTP {sc} — server error")
+            if sc >= 400:
+                return ("FAIL", "Page Not Found", f"HTTP {sc} — unreachable")
+            ai_blocked = (
+                not page.robots_allows_gptbot
+                and not page.robots_allows_claudebot
+                and not page.robots_allows_perplexitybot
+            )
+            if ai_blocked:
+                return ("FAIL", "AI Crawlers Blocked", "robots.txt blocks all AI crawlers")
+            if page.is_noindex:
+                return ("FAIL", "Excluded from Search", "noindex directive set")
+            if page.ai_score is not None and page.ai_score < 30:
+                return ("FAIL", "Critical AI Visibility Gap", f"AI score {page.ai_score}/100")
+            if not page.jsonld_count:
+                return ("WARN", "No Structured Data", "Missing JSON-LD schema")
+            if not page.robots_allows_gptbot or not page.robots_allows_claudebot:
+                return ("WARN", "Partial AI Crawl Block", "Some AI crawlers blocked")
+            if not page.has_canonical:
+                return ("WARN", "Missing Canonical Tag", "No canonical URL")
+            if not page.has_og:
+                return ("WARN", "Missing Open Graph Tags", "OG tags absent")
+            if page.ai_score is not None and page.ai_score < 60:
+                return ("WARN", "Low AI Visibility Score", f"AI score {page.ai_score}/100")
+            findings = page.findings if isinstance(page.findings, list) else []
+            if findings:
+                f = findings[0]
+                return (
+                    (f.get("severity") or page.severity or "WARN").upper(),
+                    f.get("title") or f.get("name") or "Issue Detected",
+                    f.get("description") or f.get("message") or "Unresolved issue",
+                )
+            return ("WARN", "Low AI Visibility", f"AI score {page.ai_score or 0}/100")
+
+        sitemap = SitemapAudit.objects.filter(analysis_run=run).order_by("-created_at").first()
+        critical_pages = []
+        if sitemap:
+            severity_order = Case(
+                When(severity="fail", then=0),
+                When(severity="warn", then=1),
+                default=2,
+                output_field=DjIntegerField(),
+            )
+            raw_pages = sitemap.pages.exclude(severity="ok").order_by(severity_order, "ai_score")[:5]
+            for page in raw_pages:
+                sev, title, desc = _page_issue(page)
+                path = page.path or page.url or ""
+                critical_pages.append({
+                    "severity": sev,
+                    "title": title,
+                    "description": desc,
+                    "path": path if len(path) <= 65 else path[:62] + "...",
+                    "url": page.url or "",
+                })
+
+        context = {
+            "brand_name": run.brand_name or "",
+            "url": run.url or "",
+            "brand_domain": _domain(run.url or ""),
+            "slug": run.slug,
+            "score": round(run.composite_score or 0),
+            "competitors": competitors,
+            "prompts": prompts,
+            "recommendations": recommendations,
+            "brand_visibility": brand_vis,
+            "critical_pages": critical_pages,
+            "report_date": datetime.date.today().strftime("%B %d, %Y"),
+        }
+
+        try:
+            sent = send_weekly_email(to_email, context)
+            return Response({"ok": True, "sent": sent})
+        except Exception:
+            logger.exception("WeeklyTestEmailView error for %s slug=%s", to_email, slug)
+            return Response({"ok": False, "error": "Email dispatch failed."}, status=500)

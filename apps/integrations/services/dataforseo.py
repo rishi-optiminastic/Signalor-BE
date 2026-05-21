@@ -52,7 +52,12 @@ def _post(path: str, payload: list[dict]) -> dict:
         auth=_auth(),
         timeout=TIMEOUT_SECONDS,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except Exception as http_exc:
+        raise DataForSEOError(
+            f"{path}: HTTP {resp.status_code} — {resp.text[:200]}"
+        ) from http_exc
     body = resp.json()
     if body.get("status_code") != DATAFORSEO_OK_STATUS:
         raise DataForSEOError(

@@ -1,0 +1,339 @@
+﻿<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+<meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+<meta name="viewport" content="width=device-width">
+<meta name="format-detection" content="telephone=no">
+<style type="text/css" data-premailer="ignore">
+  #outlook a { padding: 0; }
+  body { -webkit-text-size-adjust: none; -ms-text-size-adjust: none; margin: 0; padding: 0; }
+  .ReadMsgBody { width: 100%; }
+  .ExternalClass { width: 100%; }
+  img { border: 0; height: auto; outline: none; display: block; }
+</style>
+<style type="text/css">
+  @media screen and (max-width: 595px) {
+    body { padding: 8px !important; }
+    .main { width: 100% !important; }
+    .main-td { padding: 20px !important; }
+    .col3 { display: block !important; width: 100% !important; }
+  }
+</style>
+<!--[if gte mso 9]>
+<style> table { border-collapse: collapse !important; } </style>
+<![endif]-->
+</head>
+<body style="background-color:#f2f2f2;margin:0;padding:20px;" bgcolor="#f2f2f2">
+
+<!-- ── Wrapper ── -->
+<table cellspacing="0" border="0" cellpadding="0" align="center" width="595" bgcolor="#ffffff" class="main"
+  style="border-collapse:separate;border-spacing:0;font-family:Helvetica,Arial,sans-serif;table-layout:fixed;border:1px solid #e0e0e0;border-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,0.07);">
+<tbody><tr>
+<td class="main-td" style="padding:36px 52px;font-family:Helvetica,Arial,sans-serif;font-size:14px;">
+
+  <!-- ── Logo ── -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:28px;">
+    <tr>
+      <td align="left">
+        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <td style="vertical-align:middle;padding:0;">
+              <img src="{{ logo_url }}" alt="Signalor" width="28" height="28"
+                style="display:block;width:28px;height:28px;border:0;" />
+            </td>
+            <td style="vertical-align:middle;padding:0 0 0 7px;">
+              <span style="font-size:17px;font-weight:700;color:#0d0d0d;font-family:Helvetica,Arial,sans-serif;letter-spacing:-0.2px;">Signalor.ai</span>
+            </td>
+          </tr>
+        </table>
+      </td>
+      <td align="right" style="vertical-align:middle;">
+        <span style="font-size:11px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;">{{ report_date }}</span>
+      </td>
+    </tr>
+  </table>
+
+  <!-- ── Heading ── -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td>
+        <p style="margin:0 0 10px;font-size:11px;font-weight:700;color:#aaaaaa;text-transform:uppercase;letter-spacing:0.8px;font-family:Helvetica,Arial,sans-serif;">Weekly Report</p>
+        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <td style="vertical-align:middle;padding:0 10px 0 0;">
+              <img src="https://www.google.com/s2/favicons?domain={{ brand_domain }}&sz=64"
+                alt="{{ brand_name }}" width="36" height="36"
+                style="display:block;width:36px;height:36px;border-radius:6px;border:1px solid #eeeeee;" />
+            </td>
+            <td style="vertical-align:middle;">
+              <h1 style="margin:0 0 3px;font-size:22px;font-weight:700;color:#0d0d0d;font-family:Helvetica,Arial,sans-serif;line-height:1.2;">{{ brand_name }}</h1>
+              <a href="{{ url }}" target="_blank"
+                style="font-size:12px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;text-decoration:none;">
+                {{ brand_domain }}
+              </a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <!-- ── Divider ── -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;">
+    <tr><td style="border-top:1px solid #eeeeee;font-size:0;line-height:0;">&nbsp;</td></tr>
+  </table>
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 1 — GEO Score
+  ══════════════════════════════════════════════ -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;background-color:#fafafa;border:1px solid #eeeeee;border-radius:4px;">
+    <tr>
+      <td style="padding:20px 24px;">
+        <p style="margin:0 0 12px;font-size:10px;font-weight:700;color:#aaaaaa;text-transform:uppercase;letter-spacing:0.8px;font-family:Helvetica,Arial,sans-serif;">GEO Score</p>
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <td style="vertical-align:middle;">
+              <span style="font-size:44px;font-weight:700;color:#e04a3d;font-family:Helvetica,Arial,sans-serif;line-height:1;">{{ score }}</span>
+              <span style="font-size:18px;font-weight:400;color:#cccccc;font-family:Helvetica,Arial,sans-serif;">/100</span>
+            </td>
+            <td align="right" style="vertical-align:middle;">
+              <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                <tr>
+                  <td bgcolor="#e04a3d" style="background-color:#e04a3d;border-radius:3px;padding:9px 20px;" align="center">
+                    <a href="{{ dashboard_url }}" target="_blank"
+                      style="display:inline-block;color:#ffffff;font-weight:700;font-size:12px;text-decoration:none;font-family:Helvetica,Arial,sans-serif;white-space:nowrap;">
+                      View Dashboard →
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:10px 0 0;font-size:12px;color:#888888;font-family:Helvetica,Arial,sans-serif;">
+          Your overall AI search visibility score across ChatGPT, Gemini, Perplexity, and Claude.
+        </p>
+      </td>
+    </tr>
+  </table>
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 2 — AI Platform Visibility
+  ══════════════════════════════════════════════ -->
+  {% if brand_visibility %}
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td>
+        <p style="margin:0 0 12px;font-size:10px;font-weight:700;color:#aaaaaa;text-transform:uppercase;letter-spacing:0.8px;font-family:Helvetica,Arial,sans-serif;">AI Platform Visibility</p>
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <!-- Google -->
+            <td width="32%" style="padding:0 6px 0 0;vertical-align:top;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background-color:#fafafa;border:1px solid #eeeeee;border-radius:4px;">
+                <tr><td style="padding:14px 16px;">
+                  <p style="margin:0 0 6px;font-size:10px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;text-transform:uppercase;letter-spacing:0.6px;">Google</p>
+                  <p style="margin:0;font-size:26px;font-weight:700;color:#0d0d0d;font-family:Helvetica,Arial,sans-serif;line-height:1;">{{ brand_visibility.google_score|floatformat:0|default:"—" }}</p>
+                  <p style="margin:2px 0 0;font-size:10px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;">/100</p>
+                </td></tr>
+              </table>
+            </td>
+            <!-- Reddit -->
+            <td width="32%" style="padding:0 6px;vertical-align:top;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background-color:#fafafa;border:1px solid #eeeeee;border-radius:4px;">
+                <tr><td style="padding:14px 16px;">
+                  <p style="margin:0 0 6px;font-size:10px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;text-transform:uppercase;letter-spacing:0.6px;">Reddit</p>
+                  <p style="margin:0;font-size:26px;font-weight:700;color:#0d0d0d;font-family:Helvetica,Arial,sans-serif;line-height:1;">{{ brand_visibility.reddit_score|floatformat:0|default:"—" }}</p>
+                  <p style="margin:2px 0 0;font-size:10px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;">/100</p>
+                </td></tr>
+              </table>
+            </td>
+            <!-- Web Mentions -->
+            <td width="36%" style="padding:0 0 0 6px;vertical-align:top;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background-color:#fafafa;border:1px solid #eeeeee;border-radius:4px;">
+                <tr><td style="padding:14px 16px;">
+                  <p style="margin:0 0 6px;font-size:10px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;text-transform:uppercase;letter-spacing:0.6px;">Web Mentions</p>
+                  <p style="margin:0;font-size:26px;font-weight:700;color:#0d0d0d;font-family:Helvetica,Arial,sans-serif;line-height:1;">{{ brand_visibility.web_mentions_score|floatformat:0|default:"—" }}</p>
+                  <p style="margin:2px 0 0;font-size:10px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;">/100</p>
+                </td></tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 3 — Competitors
+  ══════════════════════════════════════════════ -->
+  {% if competitors %}
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td style="padding:20px 24px;background-color:#fafafa;border:1px solid #eeeeee;border-radius:4px;">
+        <p style="margin:0 0 14px;font-size:10px;font-weight:700;color:#aaaaaa;text-transform:uppercase;letter-spacing:0.8px;font-family:Helvetica,Arial,sans-serif;">Competitors Tracked</p>
+        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            {% for c in competitors %}
+            <td style="padding:0 10px 0 0;vertical-align:middle;text-align:center;">
+              <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                <tr>
+                  <td width="44" height="44"
+                    style="width:44px;height:44px;border-radius:8px;background-color:#f5f5f5;border:1px solid #eeeeee;text-align:center;vertical-align:middle;"
+                    align="center" valign="middle">
+                    <img src="https://www.google.com/s2/favicons?domain={{ c.domain }}&sz=64"
+                      alt="{{ c.name }}" width="28" height="28"
+                      style="display:block;width:28px;height:28px;margin:8px auto;border:0;" />
+                  </td>
+                </tr>
+                <tr>
+                  <td style="text-align:center;padding-top:5px;font-size:9px;color:#777777;font-family:Helvetica,Arial,sans-serif;white-space:nowrap;">
+                    {{ c.name|truncatechars:9 }}
+                  </td>
+                </tr>
+              </table>
+            </td>
+            {% endfor %}
+          </tr>
+        </table>
+        <p style="margin:12px 0 0;font-size:11px;color:#888888;font-family:Helvetica,Arial,sans-serif;">
+          <a href="{{ dashboard_url }}/competitors" style="color:#e04a3d;text-decoration:none;">View competitor analysis →</a>
+        </p>
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 4 — Prompt Tracking
+  ══════════════════════════════════════════════ -->
+  {% if prompts %}
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td>
+        <p style="margin:0 0 12px;font-size:10px;font-weight:700;color:#aaaaaa;text-transform:uppercase;letter-spacing:0.8px;font-family:Helvetica,Arial,sans-serif;">Prompt Tracking</p>
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border:1px solid #eeeeee;border-radius:4px;">
+          {% for p in prompts %}
+          <tr style="background-color:{% if forloop.odd %}#ffffff{% else %}#fafafa{% endif %};">
+            <td style="padding:10px 16px;font-size:13px;color:#333333;font-family:Helvetica,Arial,sans-serif;border-bottom:{% if not forloop.last %}1px solid #eeeeee{% else %}none{% endif %};">
+              {{ p.prompt_text|truncatechars:60 }}
+            </td>
+            <td style="padding:10px 16px;text-align:right;white-space:nowrap;border-bottom:{% if not forloop.last %}1px solid #eeeeee{% else %}none{% endif %};">
+              <span style="font-size:13px;font-weight:700;color:#e04a3d;font-family:Helvetica,Arial,sans-serif;">{{ p.score|floatformat:0|default:"0" }}</span>
+              <span style="font-size:11px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;">/100</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+        <p style="margin:8px 0 0;font-size:11px;font-family:Helvetica,Arial,sans-serif;">
+          <a href="{{ dashboard_url }}/prompts" style="color:#e04a3d;text-decoration:none;">View all tracked prompts →</a>
+        </p>
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+
+  <!-- ══════════════════════════════════════════════
+       SECTION 5 — Critical Pages (rich issue cards)
+  ══════════════════════════════════════════════ -->
+  {% if critical_pages %}
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;">
+    <tr>
+      <td>
+        <p style="margin:0 0 10px;font-size:10px;font-weight:700;color:#aaaaaa;text-transform:uppercase;letter-spacing:0.8px;font-family:Helvetica,Arial,sans-serif;">Pages With Issues</p>
+
+        <!-- Issue rows -->
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border:1px solid #eeeeee;border-radius:6px;">
+          {% for page in critical_pages %}
+          <tr>
+            <td style="padding:10px 14px;border-bottom:{% if not forloop.last %}1px solid #f0f0f0{% else %}none{% endif %};">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                <tr>
+                  <!-- Icon -->
+                  <td width="22" style="vertical-align:middle;padding-right:10px;width:22px;">
+                    {% if page.severity == 'FAIL' %}
+                    <span style="display:inline-block;width:20px;height:20px;border-radius:50%;background-color:#e04a3d;text-align:center;line-height:20px;font-size:11px;font-weight:700;color:#ffffff;font-family:Helvetica,Arial,sans-serif;">&#x2715;</span>
+                    {% else %}
+                    <span style="display:inline-block;width:20px;height:20px;border-radius:50%;background-color:#f59e0b;text-align:center;line-height:20px;font-size:11px;font-weight:700;color:#ffffff;font-family:Helvetica,Arial,sans-serif;">!</span>
+                    {% endif %}
+                  </td>
+                  <!-- Issue + path -->
+                  <td style="vertical-align:middle;">
+                    <span style="font-size:12px;font-weight:700;color:#1a1a1a;font-family:Helvetica,Arial,sans-serif;">{{ page.title }}</span>
+                    <br>
+                    <a href="{{ dashboard_url }}/sitemap" target="_blank"
+                      style="font-size:11px;color:#aaaaaa;font-family:Helvetica,Arial,sans-serif;text-decoration:none;">{{ page.path }}</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+
+        <p style="margin:10px 0 0;font-size:11px;font-family:Helvetica,Arial,sans-serif;">
+          <a href="{{ dashboard_url }}/sitemap" style="color:#e04a3d;text-decoration:none;font-weight:600;">View full sitemap audit →</a>
+        </p>
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+
+  <!-- ── Divider ── -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;">
+    <tr><td style="border-top:1px solid #eeeeee;font-size:0;line-height:0;">&nbsp;</td></tr>
+  </table>
+
+  <!-- ══════════════════════════════════════════════
+       FOOTER CTA
+  ══════════════════════════════════════════════ -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:20px;">
+    <tr>
+      <td align="center">
+        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+          <tr>
+            <td bgcolor="#0d0d0d" style="background-color:#0d0d0d;border-radius:4px;padding:12px 32px;" align="center">
+              <a href="{{ dashboard_url }}" target="_blank"
+                style="display:inline-block;color:#ffffff;font-weight:700;font-size:13px;text-decoration:none;letter-spacing:0.3px;font-family:Helvetica,Arial,sans-serif;">
+                Open Full Dashboard →
+              </a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <!-- ── Signature ── -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:4px;">
+    <tr>
+      <td style="font-size:13px;color:#555555;font-family:Helvetica,Arial,sans-serif;line-height:1.6;">
+        The Signalor Team<br>
+        <a href="mailto:hello@signalor.ai" style="color:#e04a3d;text-decoration:none;">hello@signalor.ai</a>
+      </td>
+    </tr>
+  </table>
+
+</td>
+</tr>
+</tbody>
+</table>
+
+<!-- ── Footer ── -->
+<table width="595" cellpadding="0" cellspacing="0" border="0" align="center" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:16px 30px 12px;text-align:center;">
+      <p style="margin:0 0 4px;font-size:11px;color:#bbbbbb;font-family:Helvetica,Arial,sans-serif;">
+        &copy; 2026 Signalor.ai &middot; AI Search Visibility &amp; GEO Platform
+      </p>
+      <p style="margin:0;">
+        <a href="{{ frontend_url }}" style="font-size:11px;color:#bbbbbb;font-family:Helvetica,Arial,sans-serif;text-decoration:underline;">
+          Unsubscribe
+        </a>
+      </p>
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>

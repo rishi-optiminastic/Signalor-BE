@@ -79,6 +79,7 @@ from .views import (
     UserActionListView,
     # Gamification views
     UserGamificationView,
+    WeeklyTestEmailView,
 )
 
 app_name = "analyzer"
@@ -242,4 +243,6 @@ urlpatterns = [
     ),
     path("actions/quick/", QuickActionView.as_view(), name="quick-action"),
     path("actions/bulk-create/", BulkCreateUserActionView.as_view(), name="bulk-create-action"),
+    # Weekly email test
+    path("runs/s/<str:slug>/email/weekly-test/", WeeklyTestEmailView.as_view(), name="weekly-test-email"),
 ]
