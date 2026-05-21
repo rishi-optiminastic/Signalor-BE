@@ -144,3 +144,24 @@ class Subscription(models.Model):
     @property
     def limits(self):
         return PLAN_LIMITS.get(self.plan, PLAN_LIMITS["starter"])
+
+
+class InvoiceRecord(models.Model):
+    """One row per successful Dodo payment so we can show full billing
+    history without round-tripping the Dodo API on every request. Inserted
+    by the webhook handler on subscription.active / subscription.renewed /
+    payment.succeeded. Idempotent on payment_id."""
+
+    email = models.EmailField(db_index=True)
+    payment_id = models.CharField(max_length=255, unique=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    currency = models.CharField(max_length=3, default="usd")
+    status = models.CharField(max_length=50, default="succeeded")
+    plan = models.CharField(max_length=20, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.email} {self.payment_id} {self.amount} {self.currency}"
