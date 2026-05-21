@@ -42,6 +42,7 @@ from .views import (
     ContentSuggestionsView,
     CrawlEssentialsStatusView,
     CreateUserActionView,
+    DomainAnalyticsView,
     ExportPDFView,
     GeneratePromptsView,
     GeoImprovementsView,
@@ -142,6 +143,11 @@ urlpatterns = [
     path("runs/s/<str:slug>/auto-fix/approve/", AutoFixApproveView.as_view(), name="auto-fix-approve"),
     path("runs/s/<str:slug>/auto-fix/verify/", AutoFixVerifyView.as_view(), name="auto-fix-verify"),
     path("runs/s/<str:slug>/chat/", AiChatView.as_view(), name="ai-chat"),
+    path(
+        "runs/s/<str:slug>/domain-analytics/",
+        DomainAnalyticsView.as_view(),
+        name="domain-analytics",
+    ),
     # Sitemap audit + AI agent log stub
     path("runs/s/<str:slug>/sitemap/", SitemapAuditDetailView.as_view(), name="sitemap-audit-detail"),
     path("runs/s/<str:slug>/sitemap/start/", SitemapAuditStartView.as_view(), name="sitemap-audit-start"),

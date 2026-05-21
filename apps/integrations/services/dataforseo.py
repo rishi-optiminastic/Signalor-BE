@@ -9,10 +9,11 @@ Endpoints used (live mode = no queue, immediate response):
     POST /v3/backlinks/bulk_ranks/live              -> rank (0-1000)
     POST /v3/backlinks/bulk_referring_domains/live  -> referring_domains, backlinks
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Iterable
+from collections.abc import Iterable
 
 import requests
 from django.conf import settings
@@ -36,9 +37,7 @@ def _auth() -> tuple[str, str]:
     login = getattr(settings, "DATAFORSEO_LOGIN", "") or ""
     password = getattr(settings, "DATAFORSEO_PASSWORD", "") or ""
     if not login or not password:
-        raise DataForSEONotConfigured(
-            "DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD env vars are not set."
-        )
+        raise DataForSEONotConfigured("DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD env vars are not set.")
     return (login, password)
 
 
@@ -52,21 +51,25 @@ def _post(path: str, payload: list[dict]) -> dict:
         auth=_auth(),
         timeout=TIMEOUT_SECONDS,
     )
-    resp.raise_for_status()
+    # Translate HTTP-level errors to DataForSEOError so callers (and the
+    # DomainAnalyticsView exception handler) can surface a clean 502/503
+    # instead of a raw 500. 402 = account out of credits / billing problem.
+    if resp.status_code == 402:
+        raise DataForSEOError(
+            f"{path}: 402 Payment Required — DataForSEO account is out of credits or has a billing issue."
+        )
+    if not resp.ok:
+        raise DataForSEOError(f"{path}: HTTP {resp.status_code} from DataForSEO upstream.")
     body = resp.json()
     if body.get("status_code") != DATAFORSEO_OK_STATUS:
-        raise DataForSEOError(
-            f"{path}: {body.get('status_code')} {body.get('status_message')}"
-        )
+        raise DataForSEOError(f"{path}: {body.get('status_code')} {body.get('status_message')}")
     # DataForSEO returns 200/20000 at the envelope level even when individual
     # tasks fail (auth scope, missing subscription, malformed target). Surface
     # the first per-task failure so callers see the real problem.
     for task in body.get("tasks") or []:
         task_status = task.get("status_code")
         if task_status and task_status != DATAFORSEO_OK_STATUS:
-            raise DataForSEOError(
-                f"{path}: {task_status} {task.get('status_message')}"
-            )
+            raise DataForSEOError(f"{path}: {task_status} {task.get('status_message')}")
     return body
 
 
@@ -101,14 +104,10 @@ def fetch_domain_metrics(domains: Iterable[str]) -> dict[str, dict]:
     )
 
     rd_by_target = {
-        (row.get("target") or "").lower(): row
-        for row in _extract_items(rd_body)
-        if row.get("target")
+        (row.get("target") or "").lower(): row for row in _extract_items(rd_body) if row.get("target")
     }
     rank_by_target = {
-        (row.get("target") or "").lower(): row
-        for row in _extract_items(rank_body)
-        if row.get("target")
+        (row.get("target") or "").lower(): row for row in _extract_items(rank_body) if row.get("target")
     }
 
     out: dict[str, dict] = {}
@@ -128,7 +127,7 @@ def _normalize_target(domain: str) -> str:
     d = (domain or "").strip().lower()
     for prefix in ("https://", "http://"):
         if d.startswith(prefix):
-            d = d[len(prefix):]
+            d = d[len(prefix) :]
     if d.startswith("www."):
         d = d[4:]
     return d.rstrip("/").split("/")[0]
@@ -173,9 +172,7 @@ def fetch_domain_overview(domain: str, location_code: int = 2840) -> dict:
     }
 
 
-def fetch_ranked_keywords(
-    domain: str, *, limit: int = 50, location_code: int = 2840
-) -> list[dict]:
+def fetch_ranked_keywords(domain: str, *, limit: int = 50, location_code: int = 2840) -> list[dict]:
     """
     DataForSEO Labs — Ranked Keywords.
 
@@ -199,7 +196,7 @@ def fetch_ranked_keywords(
         ],
     )
     out: list[dict] = []
-    for item in (_first_result(body).get("items") or []):
+    for item in _first_result(body).get("items") or []:
         kw_data = item.get("keyword_data") or {}
         kw_info = kw_data.get("keyword_info") or {}
         ranked = (item.get("ranked_serp_element") or {}).get("serp_item") or {}
@@ -295,8 +292,7 @@ def fetch_domain_geo_distribution(domain: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [
-            pool.submit(_fetch_country_overview, target, loc, alpha2)
-            for loc, alpha2, _name in GEO_COUNTRIES
+            pool.submit(_fetch_country_overview, target, loc, alpha2) for loc, alpha2, _name in GEO_COUNTRIES
         ]
         for fut in futures:
             alpha2, metrics = fut.result()
@@ -305,9 +301,7 @@ def fetch_domain_geo_distribution(domain: str) -> dict[str, dict]:
     return out
 
 
-def fetch_relevant_pages(
-    domain: str, *, limit: int = 20, location_code: int = 2840
-) -> list[dict]:
+def fetch_relevant_pages(domain: str, *, limit: int = 20, location_code: int = 2840) -> list[dict]:
     """
     DataForSEO Labs — Relevant Pages (top organic pages for a domain).
 
@@ -330,7 +324,7 @@ def fetch_relevant_pages(
         ],
     )
     out: list[dict] = []
-    for item in (_first_result(body).get("items") or []):
+    for item in _first_result(body).get("items") or []:
         metrics = (item.get("metrics") or {}).get("organic") or {}
         out.append(
             {
