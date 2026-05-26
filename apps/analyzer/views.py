@@ -23,11 +23,9 @@ from apps.accounts.subscription_utils import (
 )
 from apps.integrations.models import Integration
 from apps.organizations.models import Organization
-from core.middleware import _client_ip
 from core.throttling import (
     AiChatThrottle,
     AuditStartThrottle,
-    AuthSendThrottle,
     DataForSEOThrottle,
     ExpensiveThrottle,
     PollingThrottle,
@@ -46,18 +44,6 @@ from .models import (
     Recommendation,
     UserAction,
     UserGamification,
-)
-from .onboarding_security import (
-    mint_token as _mint_onboarding_token,
-)
-from .onboarding_security import (
-    turnstile_enabled as _turnstile_enabled,
-)
-from .onboarding_security import (
-    verify_token as _verify_onboarding_token,
-)
-from .onboarding_security import (
-    verify_turnstile as _verify_turnstile,
 )
 from .serializers import (
     AddPromptSerializer,
@@ -656,48 +642,6 @@ class HealthCheckView(APIView):
         return Response(health_status, status=status.HTTP_200_OK)
 
 
-class OnboardingStartView(APIView):
-    """
-    POST /api/analyzer/onboarding-start/
-
-    Mints a short-lived signed token (~15 min) that downstream public AI
-    endpoints (currently /generate-prompts/) require in the
-    ``X-Onboarding-Token`` header.
-
-    Body (optional):
-      { "turnstile_token": "<cf turnstile response>" }
-
-    If ``TURNSTILE_SECRET`` is configured server-side, ``turnstile_token`` is
-    required and verified against Cloudflare. Without it, /onboarding-start
-    only requires passing the global IP middleware + this throttle — that
-    alone breaks rotating-IP wallet-drain on /generate-prompts since each
-    fresh IP must round-trip here first (heavily throttled).
-    """
-
-    permission_classes = [AllowAny]
-    throttle_classes = [AuthSendThrottle]
-
-    def post(self, request):
-        client_ip = _client_ip(request)
-        turnstile_token = (request.data.get("turnstile_token") or "").strip()
-        if _turnstile_enabled():
-            ok, reason = _verify_turnstile(turnstile_token, client_ip)
-            if not ok:
-                logger.warning("onboarding_start turnstile fail ip=%s reason=%s", client_ip, reason)
-                return Response(
-                    {"detail": "Bot check failed. Refresh and try again.", "reason": reason},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-        token = _mint_onboarding_token(client_ip)
-        return Response(
-            {
-                "token": token,
-                "expires_in": 900,
-                "turnstile_enabled": _turnstile_enabled(),
-            }
-        )
-
-
 class StartAnalysisView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
@@ -913,7 +857,6 @@ class AnalysisRunStatusView(APIView):
 
 class ExportPDFView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, run_id):
         return self.post(request, run_id)
@@ -1586,7 +1529,6 @@ class BlogAutomationPublishView(APIView):
     """Publish AI-generated draft to connected CMS."""
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
@@ -1856,31 +1798,12 @@ class BulkCreateUserActionView(APIView):
 
 
 class GeneratePromptsView(APIView):
-    """POST /api/analyzer/generate-prompts/ — AI-generate brand-relevant prompts for onboarding.
-
-    Gated by an onboarding token (see OnboardingStartView). This forces every
-    fresh IP through a throttled (+ optionally Turnstile-gated) round-trip
-    before they can spend a Gemini call here — defeats rotating-IP wallet
-    drain that the per-IP DRF throttle alone can't stop.
-    """
+    """POST /api/analyzer/generate-prompts/ — AI-generate brand-relevant prompts for onboarding."""
 
     permission_classes = [AllowAny]
     throttle_classes = [ExpensiveThrottle]
 
     def post(self, request):
-        client_ip = _client_ip(request)
-        token = request.headers.get("X-Onboarding-Token", "")
-        ok, reason = _verify_onboarding_token(token, client_ip)
-        if not ok:
-            logger.info("generate_prompts token_reject ip=%s reason=%s", client_ip, reason)
-            return Response(
-                {
-                    "detail": "Onboarding token required. POST /api/analyzer/onboarding-start/ first.",
-                    "reason": reason,
-                },
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
         brand_name = request.data.get("brand_name", "").strip()
         brand_url = request.data.get("brand_url", "").strip()
 
@@ -1983,7 +1906,6 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
 
 class PromptListCreateView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
@@ -2067,7 +1989,6 @@ class RecheckPromptView(APIView):
     """POST /runs/s/<slug>/prompts/<track_id>/recheck/ — re-fire one prompt now."""
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug, track_id):
         import threading
@@ -2101,7 +2022,6 @@ class PromptBacklinksView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [DataForSEOThrottle]
 
     def get(self, request, slug, track_id):
         from django.shortcuts import get_object_or_404
@@ -2136,7 +2056,6 @@ class PromptOpportunitiesView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug, track_id):
         service = _opportunity_service(slug, track_id)
@@ -2368,7 +2287,6 @@ class AiRecommendationSummaryView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [PollingThrottle]
 
     def get(self, request, slug):
         from django.db.models import Count, Exists, OuterRef, Q
@@ -2596,7 +2514,6 @@ class BrandKitView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
@@ -2686,7 +2603,6 @@ class CompetitorListCreateView(APIView):
     """GET/POST /api/analyzer/runs/s/<slug>/competitors/"""
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
@@ -3928,7 +3844,6 @@ class PromptRankView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [DataForSEOThrottle]
 
     def _serialize(self, query):
         results = list(
@@ -4186,7 +4101,6 @@ class BacklinkCatalogView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [PollingThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
@@ -4309,7 +4223,6 @@ class BacklinkOrderListCreateView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
@@ -4508,7 +4421,6 @@ class BacklinkOrderConfirmPaymentView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def post(self, request, slug, order_id):
         from django.shortcuts import get_object_or_404
@@ -4576,7 +4488,6 @@ class PromptWikipediaDraftView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug, track_id):
         from django.shortcuts import get_object_or_404
@@ -4735,7 +4646,6 @@ class PromptSchemaView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     SCHEMA_TYPES = {"faq", "article", "person", "organization", "answer"}
 
@@ -5061,7 +4971,6 @@ class RunBacklinkFreeView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [ExpensiveThrottle]
 
     def get(self, request, slug):
         from django.shortcuts import get_object_or_404
