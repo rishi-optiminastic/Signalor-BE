@@ -5,9 +5,6 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.analyzer.onboarding_security import gate_onboarding_endpoint
-from core.middleware import _client_ip
-
 from .models import Organization
 from .serializers import OnboardSerializer, OrganizationSerializer
 
@@ -15,6 +12,11 @@ logger = logging.getLogger("apps")
 
 
 class OnboardView(APIView):
+    # No onboarding-token gate here: the caller already has a better-auth
+    # session by the time this fires, and the Turnstile widget on
+    # /onboarding/company-info hasn't always solved by first submit (Managed
+    # mode → visible checkbox). project_limit_reached + per-email throttling
+    # are sufficient — this endpoint only writes one Organization row.
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -22,20 +24,6 @@ class OnboardView(APIView):
         serializer.is_valid(raise_exception=True)
 
         email = serializer.validated_data["email"]
-
-        # Onboarding gate: anon / free callers must hold a token minted by
-        # /api/analyzer/onboarding-start/ (Turnstile-gated). Active subscribers
-        # bypass — dashboard "create project" doesn't go through Turnstile.
-        ok, reason = gate_onboarding_endpoint(request, email)
-        if not ok:
-            logger.info("org_onboard token_reject ip=%s reason=%s", _client_ip(request), reason)
-            return Response(
-                {
-                    "detail": "Onboarding token required. POST /api/analyzer/onboarding-start/ first.",
-                    "reason": reason,
-                },
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
 
         # Enforce project limit
         from apps.accounts.subscription_utils import plan_limit_error_response_dict, project_limit_reached

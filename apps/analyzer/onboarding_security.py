@@ -69,11 +69,23 @@ def verify_token(token: str, client_ip: str, max_age: int | None = None) -> tupl
 
 
 def subscriber_bypass(email: str | None) -> bool:
-    """Active paying subscribers (and internal emails) don't need the onboarding
-    token — they hit start-analysis / org-create from the authenticated dashboard,
-    not the public onboarding funnel where Turnstile lives."""
+    """Return True when the caller is identified enough to skip the Turnstile
+    /onboarding-token round-trip:
+
+    - Internal (@optiminastic.com etc.) email
+    - Active paying subscription
+    - Has at least one existing Organization for this email (i.e. they made
+      it through the unauthenticated /organizations/onboard/ step, which
+      requires a better-auth session on the FE)
+
+    The Org-history check matters for the onboarding flow's final
+    /analyze/ call: by then the user has created an org but doesn't yet
+    have a subscription, and Turnstile (Managed mode) may not have solved
+    in time. Anonymous tools that never create an org are still gated.
+    """
     from apps.accounts.models import Subscription
     from apps.accounts.subscription_utils import is_internal_email
+    from apps.organizations.models import Organization
 
     if is_internal_email(email):
         return True
@@ -81,9 +93,11 @@ def subscriber_bypass(email: str | None) -> bool:
     if not em:
         return False
     try:
-        return Subscription.objects.get(email=em).is_active
+        if Subscription.objects.get(email=em).is_active:
+            return True
     except Subscription.DoesNotExist:
-        return False
+        pass
+    return Organization.objects.filter(owner_email=em).exists()
 
 
 def gate_onboarding_endpoint(request, email: str | None = None) -> tuple[bool, str]:
