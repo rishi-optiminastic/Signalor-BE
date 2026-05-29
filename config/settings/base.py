@@ -177,6 +177,9 @@ REST_FRAMEWORK = {
         "polling": "120/minute",
         # Auth-adjacent: email/OTP sends, password resets. Per-IP.
         "auth_send": "10/minute",
+        # Onboarding write — per-email cap on /organizations/onboard/. Stops
+        # rotating-IP attackers from creating dupes for a single email.
+        "onboard_email": "5/hour",
         # Public API (Bearer-token) — per-key ceilings; plan tiers can refine later.
         "public_api_read": "300/minute",
         "public_api_write": "30/minute",
