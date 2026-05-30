@@ -247,6 +247,16 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 DATAFORSEO_LOGIN = os.getenv("DATAFORSEO_LOGIN", "")
 DATAFORSEO_PASSWORD = os.getenv("DATAFORSEO_PASSWORD", "")
 
+# Scraping-API fallback for the crawler. When a direct crawl is hard-blocked
+# (e.g. 403 from a Cloudflare/WAF against our datacenter IPs), the crawler
+# re-fetches via this API from residential IPs. Disabled (no behavior change)
+# until SCRAPER_API_KEY is set. Provider: "scrapingbee" (default) or "scraperapi".
+# SCRAPER_RENDER_JS toggles JS rendering (more expensive; off by default since
+# the common block is IP-reputation based, not a JS challenge).
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
+SCRAPER_API_PROVIDER = os.getenv("SCRAPER_API_PROVIDER", "scrapingbee")
+SCRAPER_RENDER_JS = os.getenv("SCRAPER_RENDER_JS", "false").lower() == "true"
+
 # Cloudflare Turnstile (anti-bot for public AI endpoints). When unset the
 # server-side check is skipped — useful for dev/staging without a CF account.
 # The frontend respects NEXT_PUBLIC_TURNSTILE_SITE_KEY independently.
