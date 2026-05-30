@@ -5,15 +5,15 @@ set -o pipefail
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Install Playwright browsers INSIDE the Python package directory (next to
-# the playwright package itself) instead of the default ~/.cache/ms-playwright.
-# Render preserves the venv between build and runtime; it does NOT preserve
-# ~/.cache. Without this, both chromium and chrome-headless-shell get
-# installed at build time and then disappear at runtime, and every screenshot
-# launch fails with "Executable doesn't exist at /opt/render/.cache/...".
-# The matching PLAYWRIGHT_BROWSERS_PATH=0 on the runtime services (see
-# render.yaml) tells Playwright to look in the same place.
-export PLAYWRIGHT_BROWSERS_PATH=0
+# Install Playwright browsers into an EXPLICIT path under the project
+# directory (preserved by Render between build and runtime). The default
+# ~/.cache/ms-playwright is wiped on deploy, and PLAYWRIGHT_BROWSERS_PATH=0
+# resolves to different sub-paths at install vs launch in 1.49+ (install
+# wrote one location, launch looked under .../driver/package/.local-browsers/
+# and 404'd). An explicit path is unambiguous on both sides.
+# The same value must be set on the runtime services (see render.yaml and
+# the os.environ.setdefault in content_optimisation.py).
+export PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/src/.ms-playwright
 
 # Chromium for Playwright-based page screenshots (content optimisation preview).
 # --with-deps installs the system libraries Chromium needs on Render's Linux image.
