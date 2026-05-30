@@ -1,51 +1,35 @@
-﻿<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background-color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <div style="max-width:560px;margin:0 auto;padding:40px 20px;">
-    <div style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+{% extends "email_shell.html" %}
 
-      <!-- Header -->
-      <div style="background:linear-gradient(135deg,#2563eb,#7c3aed);padding:32px 24px;text-align:center;">
-        <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">Welcome to Signalor</h1>
-        <p style="margin:8px 0 0;color:rgba(255,255,255,0.85);font-size:13px;">Your AI visibility platform is ready</p>
-      </div>
+{% block title %}Welcome to Signalor{% endblock %}
 
-      <!-- Body -->
-      <div style="padding:32px 24px;">
-        <p style="margin:0 0 16px;font-size:15px;color:#18181b;line-height:1.6;">
-          Your workspace <strong>{{ company_name }}</strong> has been created and is ready to use.
-        </p>
+{% block preheader %}Your Signalor workspace for {{ company_name }} is ready — run your first GEO analysis.{% endblock %}
 
-        <p style="margin:0 0 20px;font-size:14px;color:#52525b;line-height:1.6;">
-          Signalor helps you measure and improve how AI models like ChatGPT, Gemini, and Perplexity see and cite your brand. Run your first analysis to get your GEO score and personalised recommendations.
-        </p>
+{% block body %}
+  <p style="margin:0 0 6px 0;font-size:12px;font-weight:600;color:#e04a3d;letter-spacing:0.04em;text-transform:uppercase;">Welcome to Signalor</p>
+  <h1 style="margin:0 0 18px 0;font-size:22px;font-weight:700;color:#171717;letter-spacing:-0.01em;line-height:1.3;">
+    Your workspace for {{ company_name }} is live
+  </h1>
 
-        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;margin-bottom:24px;">
-          <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#1d4ed8;">Getting started:</p>
-          <ul style="margin:0;padding-left:18px;font-size:13px;color:#3730a3;line-height:1.8;">
-            <li>Run your first GEO analysis</li>
-            <li>Review your AI visibility score</li>
-            <li>Follow the prioritised recommendations</li>
-          </ul>
-        </div>
+  <p style="margin:0 0 14px 0;font-size:15px;color:#404040;line-height:1.65;">
+    Signalor tracks how AI models like ChatGPT, Gemini, Perplexity, and Claude see and cite your brand &mdash; and tells you exactly what to fix to get cited more.
+  </p>
 
-        <!-- CTA -->
-        <div style="text-align:center;">
-          <a href="{{ dashboard_url }}" style="display:inline-block;padding:12px 32px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600;">
-            Go to Dashboard
-          </a>
-        </div>
-      </div>
-    </div>
+  <p style="margin:0 0 22px 0;font-size:15px;color:#404040;line-height:1.65;">
+    Run your first GEO analysis to get your baseline score and your prioritised recommendations.
+  </p>
 
-    <!-- Footer -->
-    <p style="text-align:center;margin:24px 0 0;color:#a1a1aa;font-size:11px;">
-      Sent by <a href="{{ frontend_url }}" style="color:#a1a1aa;">Signalor.ai</a>
-    </p>
+  <div style="background-color:#fff5f3;border:1px solid #f5d1cb;border-radius:10px;padding:16px 18px;margin:0 0 26px 0;">
+    <p style="margin:0 0 10px 0;font-size:13px;font-weight:600;color:#a8362b;letter-spacing:0.01em;">Getting started</p>
+    <ul style="margin:0;padding-left:18px;font-size:13.5px;color:#5c1f17;line-height:1.85;">
+      <li>Run your first GEO analysis</li>
+      <li>Review your AI visibility score</li>
+      <li>Follow the prioritised recommendations</li>
+    </ul>
   </div>
-</body>
-</html>
+
+  <div style="text-align:left;margin:8px 0 0 0;">
+    <a href="{{ dashboard_url }}" style="display:inline-block;padding:13px 28px;background-color:#e04a3d;color:#ffffff;text-decoration:none;border-radius:9px;font-size:14px;font-weight:600;letter-spacing:-0.01em;">
+      Go to Dashboard &rarr;
+    </a>
+  </div>
+{% endblock %}

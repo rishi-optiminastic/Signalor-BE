@@ -41,8 +41,8 @@ CORS_ALLOWED_ORIGINS = [
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# Use real SMTP when SendGrid key is present, otherwise print to console
-if os.getenv("SMTP_PASS"):
+# Use real SMTP when SendGrid (or legacy SMTP_PASS) key is present, otherwise print to console.
+if os.getenv("SENDGRID_API_KEY") or os.getenv("SMTP_PASS"):
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"

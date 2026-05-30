@@ -12,4 +12,5 @@ urlpatterns = [
     path('api/integrations/', include('apps.integrations.urls')),
     path('api/visibility/', include('apps.visibility.urls')),
     path('api/', include('apps.accounts.urls')),
+    path('api/drip/', include('apps.drip.urls')),
 ]

@@ -21,6 +21,7 @@ def send_payment_confirmation_email(to_email: str, payment_id: str, plan: str, c
         "dashboard_url": f"{FRONTEND_URL}/dashboard",
         "billing_url": f"{FRONTEND_URL}/settings/billing",
         "frontend_url": FRONTEND_URL,
+        "logo_url": settings.SIGNALOR_LOGO_URL,
     }
 
     try:
@@ -59,6 +60,7 @@ def send_welcome_email(to_email: str, company_name: str):
         "company_name": company_name,
         "dashboard_url": dashboard_url,
         "frontend_url": FRONTEND_URL,
+        "logo_url": settings.SIGNALOR_LOGO_URL,
     }
 
     try:

@@ -110,6 +110,12 @@ class Subscription(models.Model):
     payment_subscription_id = models.CharField(max_length=255, blank=True, default="")
     # Latest Dodo payment_id — used to download invoice PDF (webhooks update this)
     last_invoice_payment_id = models.CharField(max_length=255, blank=True, default="")
+    # Carried over from a deprecated billing-emails feature; columns exist in
+    # Postgres but no code references them. Declared here so Django INSERTs
+    # populate them (empty default for the NOT NULL one) instead of tripping
+    # the constraint.
+    last_billing_emails_payment_id = models.CharField(max_length=255, blank=True, default="")
+    welcome_email_sent_at = models.DateTimeField(null=True, blank=True)
     # Keep old Stripe fields for backwards compatibility during migration
     stripe_customer_id = models.CharField(max_length=255, blank=True, default="")
     stripe_subscription_id = models.CharField(max_length=255, blank=True, default="")

@@ -15,9 +15,12 @@ from rest_framework.views import APIView
 
 from datetime import timedelta
 
-from .models import Subscription, InvoiceRecord, PLAN_LIMITS
+from .models import Subscription, InvoiceRecord, PLAN_LIMITS, User
 from .subscription_utils import is_internal_email
 from .email_utils import send_payment_confirmation_email
+from .amplitude_client import track_purchase_completed
+from apps.organizations.models import Organization
+from apps.drip.models import PricingDripState
 from dodopayments import AuthenticationError, PermissionDeniedError
 
 from .dodo_env import (
@@ -370,6 +373,43 @@ class DodoWebhookView(APIView):
         self._save_invoice_record(data, sub)
         send_payment_confirmation_email(sub.email, sub.last_invoice_payment_id, sub.plan, sub.currency)
         logger.info("Subscription activated for %s (plan=%s)", email, sub.plan)
+
+        # Amplitude: fire purchase_completed on first-activation only. Renewals
+        # and one-off payment.succeeded events are intentionally NOT tracked
+        # here — that would inflate the conversion funnel.
+        amount_cents = data.get("total_amount") or data.get("amount") or 0
+        try:
+            amount_usd = float(amount_cents) / 100.0
+        except (TypeError, ValueError):
+            amount_usd = 0.0
+        user_id = User.objects.filter(email=email).values_list("id", flat=True).first()
+        domain = (
+            Organization.objects.filter(owner_email=email)
+            .order_by("-created_at")
+            .values_list("url", flat=True)
+            .first()
+        ) or ""
+        track_purchase_completed(
+            user_id=str(user_id) if user_id is not None else email,
+            plan=sub.plan,
+            domain=domain,
+            amount_usd=amount_usd,
+        )
+
+        # Drip: suppress this user permanently so any future /pricing visit
+        # doesn't re-trigger the sequence. Idempotent — already-suppressed rows
+        # are left untouched.
+        try:
+            drip_state, _ = PricingDripState.objects.get_or_create(email=email)
+            if not drip_state.suppressed:
+                drip_state.suppressed = True
+                drip_state.suppressed_reason = "purchase_completed"
+                drip_state.suppressed_at = timezone.now()
+                drip_state.save(
+                    update_fields=["suppressed", "suppressed_reason", "suppressed_at", "updated_at"]
+                )
+        except Exception:
+            logger.exception("Failed to suppress drip for %s on purchase", email)
 
     def _handle_subscription_renewed(self, data):
         """Subscription renewed for next period."""
