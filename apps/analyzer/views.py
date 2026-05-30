@@ -42,6 +42,7 @@ from .models import (
     BlogAutomationJob,
     Competitor,
     GeoImprovement,
+    PromptCitation,
     PromptResult,
     PromptTrack,
     Recommendation,
@@ -2011,6 +2012,88 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
         invalidate_run_aggregates(track.analysis_run.slug)
     except Exception as exc:
         logger.warning("PromptTrack #%d fire failed: %s", track.pk, exc)
+
+
+def _competitor_host(url: str) -> str:
+    """Extract a normalized lookup host from a competitor URL.
+    Strips protocol and a leading 'www.' so it can be compared against
+    PromptCitation.domain (which is stored the same way)."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    try:
+        host = urlparse(raw).netloc
+    except Exception:
+        return ""
+    return host.removeprefix("www.").lower()
+
+
+class CompetitorPromptListView(APIView):
+    """GET /runs/s/<slug>/competitor-prompts/ — prompts for this run where
+    competitor brands surfaced in the AI response set. Decorates each row
+    with `mentioned_competitors_detail` derived from existing PromptCitation
+    rows (no new model, no generation pipeline)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.db.models import Q
+        from django.shortcuts import get_object_or_404
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+
+        # Prompts whose AI responses cited a competitor domain — the signal
+        # is recorded on PromptCitation.is_competitor at scoring time.
+        competitive_prompt_ids = (
+            PromptCitation.objects
+            .filter(
+                prompt_result__prompt_track__analysis_run=run,
+                is_competitor=True,
+            )
+            .values_list("prompt_result__prompt_track_id", flat=True)
+            .distinct()
+        )
+
+        # Include prompts explicitly typed as COMPETITIVE too (handles cases
+        # where the prompt was classified but its AI results haven't been
+        # scored yet, so no PromptCitation rows exist).
+        tracks = (
+            run.prompt_tracks
+               .filter(deleted_at__isnull=True)
+               .filter(
+                   Q(id__in=competitive_prompt_ids)
+                   | Q(prompt_type=PromptTrack.PromptSurfaceType.COMPETITIVE)
+               )
+               .select_related("analysis_run")
+               .prefetch_related("results", "results__citations")
+               .order_by("-score", "-created_at")
+        )
+
+        # Build a {domain -> competitor payload} map once for cheap lookup
+        # during the per-prompt decoration loop below.
+        competitor_by_domain: dict[str, dict] = {}
+        for c in Competitor.objects.filter(analysis_run=run):
+            host = _competitor_host(c.url)
+            if host:
+                competitor_by_domain[host] = {"id": c.id, "name": c.name, "url": c.url}
+
+        serialized = PromptTrackSerializer(tracks, many=True).data
+        # Decorate each serialized prompt with the distinct competitors its
+        # AI citations actually surfaced. Keyed by id to dedupe across engines.
+        for payload, track in zip(serialized, tracks):
+            mentioned: dict[int, dict] = {}
+            for pr in track.results.all():
+                for cit in pr.citations.all():
+                    if not cit.is_competitor:
+                        continue
+                    info = competitor_by_domain.get((cit.domain or "").lower())
+                    if info:
+                        mentioned[info["id"]] = info
+            payload["mentioned_competitors_detail"] = list(mentioned.values())
+
+        return Response(serialized)
 
 
 class PromptListCreateView(APIView):
