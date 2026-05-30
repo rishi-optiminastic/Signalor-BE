@@ -11,6 +11,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.subscription_utils import (
@@ -35,6 +36,7 @@ from .models import (
     BlogAutomationJob,
     PromptTrack,
     PromptResult,
+    PromptCitation,
     ACHIEVEMENTS_INFO,
     ACTION_TEMPLATES,
 )
@@ -632,8 +634,25 @@ class HealthCheckView(APIView):
         
         return Response(health_status, status=status.HTTP_200_OK)
 
+class FreeAuditAnonThrottle(AnonRateThrottle):
+    """Caps anonymous landing-page audits per IP. Rate defined in
+    REST_FRAMEWORK.DEFAULT_THROTTLE_RATES['free_audit_anon'].
+
+    Tolerates a missing rate (dev settings wipe THROTTLE_RATES to {})
+    by disabling itself instead of raising ImproperlyConfigured."""
+    scope = "free_audit_anon"
+
+    def get_rate(self):
+        from django.core.exceptions import ImproperlyConfigured
+        try:
+            return super().get_rate()
+        except ImproperlyConfigured:
+            return None
+
+
 class StartAnalysisView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [FreeAuditAnonThrottle]
 
     def post(self, request):
         serializer = StartAnalysisSerializer(data=request.data)
@@ -649,17 +668,21 @@ class StartAnalysisView(APIView):
         email = data.get("email", "")
         org_id = data.get("org_id")
 
-        allowed, sub_err = analysis_allowed_for_email(email)
-        if not allowed:
-            return Response({"error": sub_err}, status=status.HTTP_403_FORBIDDEN)
+        # Anonymous landing-page audit (no email): the "Free first scan" CTA on /
+        # promises this works without sign-up. Quota gates only apply when an
+        # identifying email is present; abuse is bounded by FreeAuditAnonThrottle.
+        if email:
+            allowed, sub_err = analysis_allowed_for_email(email)
+            if not allowed:
+                return Response({"error": sub_err}, status=status.HTTP_403_FORBIDDEN)
 
-        # Plan cap: each completed analysis adds up to 10 prompt tracks
-        batch_exceeds, batch_msg = prompt_batch_would_exceed(email, 10)
-        if batch_exceeds:
-            return Response(
-                plan_limit_error_response_dict(batch_msg),
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            # Plan cap: each completed analysis adds up to 10 prompt tracks
+            batch_exceeds, batch_msg = prompt_batch_would_exceed(email, 10)
+            if batch_exceeds:
+                return Response(
+                    plan_limit_error_response_dict(batch_msg),
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         # Block duplicate submissions: same URL still pending/running for the same org (or user)
         submitted_url = data["url"]
@@ -1811,6 +1834,88 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
         ])
     except Exception as exc:
         logger.warning("PromptTrack #%d fire failed: %s", track.pk, exc)
+
+
+def _competitor_host(url: str) -> str:
+    """Extract a normalized lookup host from a competitor URL.
+    Strips protocol and a leading 'www.' so it can be compared against
+    PromptCitation.domain (which is stored the same way)."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    try:
+        host = urlparse(raw).netloc
+    except Exception:
+        return ""
+    return host.removeprefix("www.").lower()
+
+
+class CompetitorPromptListView(APIView):
+    """GET /runs/s/<slug>/competitor-prompts/ — prompts for this run where
+    competitor brands surfaced in the AI response set. Decorates each row
+    with `mentioned_competitors_detail` derived from existing PromptCitation
+    rows (no new model, no generation pipeline)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.db.models import Q
+        from django.shortcuts import get_object_or_404
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+
+        # Prompts whose AI responses cited a competitor domain — the signal
+        # is recorded on PromptCitation.is_competitor at scoring time.
+        competitive_prompt_ids = (
+            PromptCitation.objects
+            .filter(
+                prompt_result__prompt_track__analysis_run=run,
+                is_competitor=True,
+            )
+            .values_list("prompt_result__prompt_track_id", flat=True)
+            .distinct()
+        )
+
+        # Include prompts explicitly typed as COMPETITIVE too (handles cases
+        # where the prompt was classified but its AI results haven't been
+        # scored yet, so no PromptCitation rows exist).
+        tracks = (
+            run.prompt_tracks
+               .filter(deleted_at__isnull=True)
+               .filter(
+                   Q(id__in=competitive_prompt_ids)
+                   | Q(prompt_type=PromptTrack.PromptSurfaceType.COMPETITIVE)
+               )
+               .select_related("analysis_run")
+               .prefetch_related("results", "results__citations")
+               .order_by("-score", "-created_at")
+        )
+
+        # Build a {domain -> competitor payload} map once for cheap lookup
+        # during the per-prompt decoration loop below.
+        competitor_by_domain: dict[str, dict] = {}
+        for c in Competitor.objects.filter(analysis_run=run):
+            host = _competitor_host(c.url)
+            if host:
+                competitor_by_domain[host] = {"id": c.id, "name": c.name, "url": c.url}
+
+        serialized = PromptTrackSerializer(tracks, many=True).data
+        # Decorate each serialized prompt with the distinct competitors its
+        # AI citations actually surfaced. Keyed by id to dedupe across engines.
+        for payload, track in zip(serialized, tracks):
+            mentioned: dict[int, dict] = {}
+            for pr in track.results.all():
+                for cit in pr.citations.all():
+                    if not cit.is_competitor:
+                        continue
+                    info = competitor_by_domain.get((cit.domain or "").lower())
+                    if info:
+                        mentioned[info["id"]] = info
+            payload["mentioned_competitors_detail"] = list(mentioned.values())
+
+        return Response(serialized)
 
 
 class PromptListCreateView(APIView):

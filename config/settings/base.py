@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'apps.integrations.apps.IntegrationsConfig',
     'apps.visibility.apps.VisibilityConfig',
     'apps.recommendation.apps.RecommendationConfig',
+    'apps.drip.apps.DripConfig',
     'core',
 ]
 
@@ -129,7 +130,10 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/hour',
-        'user': '1000/hour'
+        'user': '1000/hour',
+        # Landing-page "Free first scan" endpoint. Hardened against IP-based
+        # abuse but lenient enough that a curious visitor can poke around.
+        'free_audit_anon': '3/day',
     },
     'EXCEPTION_HANDLER': 'core.exceptions.custom_exception_handler',
 }
@@ -197,13 +201,39 @@ GOOGLE_ANALYTICS_REDIRECT_URI = os.getenv(
 )
 ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY', '')
 
+AMPLITUDE_API_KEY = os.getenv('AMPLITUDE_API_KEY', '')
+
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY', '')
+
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+if SENDGRID_API_KEY:
+    # When SendGrid is configured, all Django outbound mail (welcome, payment
+    # confirmation, drip campaign) is relayed through SendGrid's SMTP gateway.
+    EMAIL_HOST = 'smtp.sendgrid.net'
+    EMAIL_HOST_USER = 'apikey'
+    EMAIL_HOST_PASSWORD = SENDGRID_API_KEY
+else:
+    EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
+    EMAIL_HOST_USER = os.getenv('SMTP_USER', '')
+    EMAIL_HOST_PASSWORD = os.getenv('SMTP_PASS', '')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.getenv('SMTP_USER', '')
-EMAIL_HOST_PASSWORD = os.getenv('SMTP_PASS', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@example.com')
+FOUNDER_FROM_EMAIL = os.getenv('FOUNDER_FROM_EMAIL', 'rishi@signalor.ai')
+FOUNDER_FROM_NAME = os.getenv('FOUNDER_FROM_NAME', 'Rishi')
+
+# Branding consumed by HTML email templates. FRONTEND_BASE_URL is also the
+# default host for the logo asset — override SIGNALOR_LOGO_URL to point at a
+# CDN or a stable hosted PNG if the FE origin isn't reliable for image hot-linking.
+FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', 'http://localhost:3000').rstrip('/')
+BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL', 'http://localhost:8000').rstrip('/')
+# Cloudinary-hosted SVG with f_auto so the CDN serves a PNG fallback for
+# email clients that don't render SVG (Outlook, some Gmail variants).
+SIGNALOR_LOGO_URL = (
+    os.getenv('SIGNALOR_LOGO_URL')
+    or 'https://res.cloudinary.com/dui7h1n3d/image/upload/q_auto/f_auto/v1779273045/icon_mitiu2.svg'
+)
+SIGNALOR_BRAND_PRIMARY = '#e04a3d'  # canonical orange — matches FE --primary
 
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
