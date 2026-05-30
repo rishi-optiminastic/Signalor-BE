@@ -13,8 +13,13 @@ from django.db import migrations
 
 class Migration(migrations.Migration):
 
+    # Re-pinned onto the current leaf: this migration came over from tushar-05
+    # depending on 0036_drop_orphaned_tables, which is NOT part of staging's
+    # lineage (that branch's 0036 drops tables that are live models here). The
+    # only operation we want is the column drop below, so we chain it as a new
+    # tail after the latest merge.
     dependencies = [
-        ("analyzer", "0036_drop_orphaned_tables"),
+        ("analyzer", "0045_merge_20260514_1425"),
     ]
 
     operations = [
