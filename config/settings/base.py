@@ -257,9 +257,14 @@ DATAFORSEO_PASSWORD = os.getenv("DATAFORSEO_PASSWORD", "")
 # until SCRAPER_API_KEY is set. Provider: "scrapingbee" (default) or "scraperapi".
 # SCRAPER_RENDER_JS toggles JS rendering (more expensive; off by default since
 # the common block is IP-reputation based, not a JS challenge).
+# SCRAPER_STEALTH (on by default) routes the fallback through the provider's
+# anti-bot proxy with JS rendering (ScrapingBee stealth_proxy / ScraperAPI
+# ultra_premium) so Cloudflare managed challenges / Turnstile are solved
+# server-side. Costs more provider credits, but only fires on blocked sites.
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
 SCRAPER_API_PROVIDER = os.getenv("SCRAPER_API_PROVIDER", "scrapingbee")
 SCRAPER_RENDER_JS = os.getenv("SCRAPER_RENDER_JS", "false").lower() == "true"
+SCRAPER_STEALTH = os.getenv("SCRAPER_STEALTH", "true").lower() == "true"
 
 # Cloudflare Turnstile (anti-bot for public AI endpoints). When unset the
 # server-side check is skipped — useful for dev/staging without a CF account.
