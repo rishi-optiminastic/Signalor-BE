@@ -16,22 +16,25 @@ logger = logging.getLogger("apps")
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Default models
-# Note: OpenRouter rejects bare "google/gemini-2.0-flash" with HTTP 400 —
-# must use the versioned ID. Keep in sync with apps/analyzer/auto_fix.py.
+# Default models.
+# OpenRouter model IDs change over time: "google/gemini-2.0-flash-001" was
+# delisted (HTTP 404 "No endpoints found"), so we route to 2.5-flash. Override
+# via OPENROUTER_GEMINI_MODEL if it's delisted again. Keep in sync with
+# apps/analyzer/auto_fix.py.
+GEMINI_MODEL = os.getenv("OPENROUTER_GEMINI_MODEL", "google/gemini-2.5-flash")
 MODELS = {
     "gpt": "openai/gpt-4o-mini",
     "claude": "anthropic/claude-3.5-haiku",
-    "gemini": "google/gemini-2.0-flash-001",
+    "gemini": GEMINI_MODEL,
     "perplexity": "perplexity/sonar",
 }
 
 MODEL_LABELS = {
     "openai/gpt-4o-mini": "GPT-4o Mini",
     "anthropic/claude-3.5-haiku": "Claude 3.5 Haiku",
-    "google/gemini-2.0-flash-001": "Gemini 2.0 Flash",
+    GEMINI_MODEL: "Gemini 2.5 Flash",
     "perplexity/sonar": "Perplexity Sonar",
-    "gemini-direct": "Gemini 2.0 Flash (Direct)",
+    "gemini-direct": "Gemini (Direct)",
 }
 
 # Default rotation order
@@ -393,7 +396,7 @@ def _call_gemini_direct(prompt: str, purpose: str = "") -> str:
         import google.generativeai as genai
 
         genai.configure(api_key=google_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt, generation_config={"temperature": 0.0})
         text = response.text.strip()
         duration_ms = int((time.time() - t0) * 1000)
