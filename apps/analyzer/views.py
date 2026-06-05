@@ -18,6 +18,7 @@ from apps.accounts.subscription_utils import (
     get_plan_limits,
     is_plan_limits_enforcement_enabled,
     plan_limit_error_response_dict,
+    project_limit_reached,
     prompt_batch_would_exceed,
     prompt_limit_reached,
 )
@@ -41,11 +42,15 @@ from .models import (
     BlogAutomationJob,
     Competitor,
     GeoImprovement,
+    PromptCitation,
     PromptResult,
     PromptTrack,
     Recommendation,
     UserAction,
     UserGamification,
+)
+from .onboarding_security import (
+    gate_onboarding_endpoint as _gate_onboarding_endpoint,
 )
 from .onboarding_security import (
     mint_token as _mint_onboarding_token,
@@ -716,9 +721,37 @@ class StartAnalysisView(APIView):
         email = data.get("email", "")
         org_id = data.get("org_id")
 
+        # Onboarding gate: anon / free callers must hold a token minted by
+        # /onboarding-start/ (which is Turnstile-gated). Active subscribers
+        # bypass — the dashboard "run new analysis" button has no Turnstile.
+        ok, reason = _gate_onboarding_endpoint(request, email)
+        if not ok:
+            logger.info("start_analysis token_reject ip=%s reason=%s", _client_ip(request), reason)
+            return Response(
+                {
+                    "detail": "Onboarding token required. POST /api/analyzer/onboarding-start/ first.",
+                    "reason": reason,
+                },
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         allowed, sub_err = analysis_allowed_for_email(email)
         if not allowed:
             return Response({"error": sub_err}, status=status.HTTP_403_FORBIDDEN)
+
+        # Project cap: if the caller is at their plan's project limit AND this
+        # analysis would land in a fresh org (no existing org for this email),
+        # block it. Without this, free-tier users could create unlimited
+        # orphan AnalysisRuns and burn AI calls without ever creating an org.
+        if email and not org_id:
+            existing_org = Organization.objects.filter(owner_email=email).first()
+            if not existing_org:
+                reached, msg = project_limit_reached(email)
+                if reached:
+                    return Response(
+                        plan_limit_error_response_dict(msg),
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         # Plan cap: each completed analysis adds up to 10 prompt tracks.
         # Anonymous (no email) requests are free-tool scans — no account to cap.
@@ -799,6 +832,16 @@ class StartAnalysisView(APIView):
         )
 
 
+# The analysis pipeline runs in a background thread (no Celery), so a worker
+# restart — redeploy, crash, instance recycle — kills it mid-run and leaves the
+# AnalysisRun stuck in a non-terminal status forever, which the frontend polls
+# indefinitely. If a run hasn't advanced (updated_at) within this window, the
+# worker is gone; we mark it failed on the next poll so the UI recovers on its
+# own. A single-page analysis normally finishes in well under a minute.
+_TERMINAL_RUN_STATUSES = {AnalysisRun.Status.COMPLETE, AnalysisRun.Status.FAILED}
+_STALE_RUN_TIMEOUT = timedelta(minutes=5)
+
+
 class AnalysisRunBySlugView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [PollingThrottle]
@@ -820,6 +863,16 @@ class AnalysisRunBySlugView(APIView):
                 {"error": "Project not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        # Self-heal orphaned runs whose background worker died (see note above).
+        if run.status not in _TERMINAL_RUN_STATUSES and run.updated_at < timezone.now() - _STALE_RUN_TIMEOUT:
+            run.status = AnalysisRun.Status.FAILED
+            if not run.error_message:
+                run.error_message = (
+                    "Analysis stalled — no progress for over 5 minutes, so the "
+                    "background worker likely restarted. Please re-run the analysis."
+                )
+            run.save(update_fields=["status", "error_message", "updated_at"])
 
         serializer = AnalysisRunDetailSerializer(run)
         return Response(serializer.data)
@@ -1979,6 +2032,85 @@ def _fire_and_save_prompt(track: PromptTrack, brand_name: str, brand_url: str):
         invalidate_run_aggregates(track.analysis_run.slug)
     except Exception as exc:
         logger.warning("PromptTrack #%d fire failed: %s", track.pk, exc)
+
+
+def _competitor_host(url: str) -> str:
+    """Extract a normalized lookup host from a competitor URL.
+    Strips protocol and a leading 'www.' so it can be compared against
+    PromptCitation.domain (which is stored the same way)."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    try:
+        host = urlparse(raw).netloc
+    except Exception:
+        return ""
+    return host.removeprefix("www.").lower()
+
+
+class CompetitorPromptListView(APIView):
+    """GET /runs/s/<slug>/competitor-prompts/ — prompts for this run where
+    competitor brands surfaced in the AI response set. Decorates each row
+    with `mentioned_competitors_detail` derived from existing PromptCitation
+    rows (no new model, no generation pipeline)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug):
+        from django.db.models import Q
+        from django.shortcuts import get_object_or_404
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+
+        # Prompts whose AI responses cited a competitor domain — the signal
+        # is recorded on PromptCitation.is_competitor at scoring time.
+        competitive_prompt_ids = (
+            PromptCitation.objects.filter(
+                prompt_result__prompt_track__analysis_run=run,
+                is_competitor=True,
+            )
+            .values_list("prompt_result__prompt_track_id", flat=True)
+            .distinct()
+        )
+
+        # Include prompts explicitly typed as COMPETITIVE too (handles cases
+        # where the prompt was classified but its AI results haven't been
+        # scored yet, so no PromptCitation rows exist).
+        tracks = (
+            run.prompt_tracks.filter(deleted_at__isnull=True)
+            .filter(
+                Q(id__in=competitive_prompt_ids) | Q(prompt_type=PromptTrack.PromptSurfaceType.COMPETITIVE)
+            )
+            .select_related("analysis_run")
+            .prefetch_related("results", "results__citations")
+            .order_by("-score", "-created_at")
+        )
+
+        # Build a {domain -> competitor payload} map once for cheap lookup
+        # during the per-prompt decoration loop below.
+        competitor_by_domain: dict[str, dict] = {}
+        for c in Competitor.objects.filter(analysis_run=run):
+            host = _competitor_host(c.url)
+            if host:
+                competitor_by_domain[host] = {"id": c.id, "name": c.name, "url": c.url}
+
+        serialized = PromptTrackSerializer(tracks, many=True).data
+        # Decorate each serialized prompt with the distinct competitors its
+        # AI citations actually surfaced. Keyed by id to dedupe across engines.
+        for payload, track in zip(serialized, tracks, strict=True):
+            mentioned: dict[int, dict] = {}
+            for pr in track.results.all():
+                for cit in pr.citations.all():
+                    if not cit.is_competitor:
+                        continue
+                    info = competitor_by_domain.get((cit.domain or "").lower())
+                    if info:
+                        mentioned[info["id"]] = info
+            payload["mentioned_competitors_detail"] = list(mentioned.values())
+
+        return Response(serialized)
 
 
 class PromptListCreateView(APIView):
@@ -3501,8 +3633,9 @@ class SitemapAuditStartView(APIView):
     def post(self, request, slug):
         from django.shortcuts import get_object_or_404
 
+        from .celery_tasks import run_sitemap_audit_task
         from .models import SitemapAudit
-        from .pipeline.sitemap_audit import HARD_URL_CAP, run_sitemap_audit
+        from .pipeline.sitemap_audit import HARD_URL_CAP
         from .serializers import SitemapAuditSerializer
 
         run = get_object_or_404(AnalysisRun, slug=slug)
@@ -3511,17 +3644,7 @@ class SitemapAuditStartView(APIView):
             status=SitemapAudit.Status.QUEUED,
             crawl_limit=HARD_URL_CAP,
         )
-
-        from ._thread_safety import run_in_background_with_status
-
-        run_in_background_with_status(
-            model_cls=SitemapAudit,
-            instance_id=audit.id,
-            status_field="status",
-            failure_value=SitemapAudit.Status.FAILED,
-            work=lambda: run_sitemap_audit(audit.id),
-            log_label="run_sitemap_audit",
-        )
+        run_sitemap_audit_task.delay(audit.id)
 
         return Response(
             SitemapAuditSerializer(audit).data,

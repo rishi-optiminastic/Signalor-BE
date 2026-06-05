@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from corsheaders.defaults import default_headers as default_cors_headers
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -13,6 +14,22 @@ if _env_path.exists():
     load_dotenv(_env_path, override=True)
 if _env_local.exists():
     load_dotenv(_env_local, override=True)
+
+# ── Sentry (error monitoring) ──────────────────────────────────────────────
+# No-op unless SENTRY_DSN is set, so local/dev/tests never report. Set the DSN
+# in the staging/prod environment to capture unhandled exceptions + DRF 500s.
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration()],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        send_default_pii=False,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+    )
 
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
@@ -29,6 +46,7 @@ INSTALLED_APPS = [
     "apps.accounts.apps.AccountsConfig",
     "apps.organizations.apps.OrganizationsConfig",
     "apps.analyzer.apps.AnalyzerConfig",
+    "apps.drip.apps.DripConfig",
     "apps.integrations.apps.IntegrationsConfig",
     "apps.visibility.apps.VisibilityConfig",
     "apps.recommendation.apps.RecommendationConfig",
@@ -177,6 +195,9 @@ REST_FRAMEWORK = {
         "polling": "120/minute",
         # Auth-adjacent: email/OTP sends, password resets. Per-IP.
         "auth_send": "10/minute",
+        # Onboarding write — per-email cap on /organizations/onboard/. Stops
+        # rotating-IP attackers from creating dupes for a single email.
+        "onboard_email": "5/hour",
         # Public API (Bearer-token) — per-key ceilings; plan tiers can refine later.
         "public_api_read": "300/minute",
         "public_api_write": "30/minute",
@@ -246,18 +267,57 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 DATAFORSEO_LOGIN = os.getenv("DATAFORSEO_LOGIN", "")
 DATAFORSEO_PASSWORD = os.getenv("DATAFORSEO_PASSWORD", "")
 
+# Scraping-API fallback for the crawler. When a direct crawl is hard-blocked
+# (e.g. 403 from a Cloudflare/WAF against our datacenter IPs), the crawler
+# re-fetches via this API from residential IPs. Disabled (no behavior change)
+# until SCRAPER_API_KEY is set. Provider: "scrapingbee" (default) or "scraperapi".
+# SCRAPER_RENDER_JS toggles JS rendering (more expensive; off by default since
+# the common block is IP-reputation based, not a JS challenge).
+# SCRAPER_STEALTH (on by default) routes the fallback through the provider's
+# anti-bot proxy with JS rendering (ScrapingBee stealth_proxy / ScraperAPI
+# ultra_premium) so Cloudflare managed challenges / Turnstile are solved
+# server-side. Costs more provider credits, but only fires on blocked sites.
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "")
+SCRAPER_API_PROVIDER = os.getenv("SCRAPER_API_PROVIDER", "scrapingbee")
+SCRAPER_RENDER_JS = os.getenv("SCRAPER_RENDER_JS", "false").lower() == "true"
+SCRAPER_STEALTH = os.getenv("SCRAPER_STEALTH", "true").lower() == "true"
+
 # Cloudflare Turnstile (anti-bot for public AI endpoints). When unset the
 # server-side check is skipped — useful for dev/staging without a CF account.
 # The frontend respects NEXT_PUBLIC_TURNSTILE_SITE_KEY independently.
 TURNSTILE_SECRET = os.getenv("TURNSTILE_SECRET", "")
 
+AMPLITUDE_API_KEY = os.getenv("AMPLITUDE_API_KEY", "")
+
+# Drip + transactional emails relay through SendGrid SMTP when configured;
+# otherwise the legacy SMTP_USER/SMTP_PASS path stays active.
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+if SENDGRID_API_KEY:
+    EMAIL_HOST = "smtp.sendgrid.net"
+    EMAIL_HOST_USER = "apikey"
+    EMAIL_HOST_PASSWORD = SENDGRID_API_KEY
+else:
+    EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+    EMAIL_HOST_USER = os.getenv("SMTP_USER", "")
+    EMAIL_HOST_PASSWORD = os.getenv("SMTP_PASS", "")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.getenv("SMTP_USER", "")
-EMAIL_HOST_PASSWORD = os.getenv("SMTP_PASS", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@example.com")
+FOUNDER_FROM_EMAIL = os.getenv("FOUNDER_FROM_EMAIL", "rishi@signalor.ai")
+FOUNDER_FROM_NAME = os.getenv("FOUNDER_FROM_NAME", "Rishi")
+
+# Branding used by drip + welcome HTML email templates.
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://localhost:8000").rstrip("/")
+# Cloudinary-hosted with f_auto so email clients that don't render SVG
+# (Outlook etc.) get a PNG fallback automatically.
+SIGNALOR_LOGO_URL = (
+    os.getenv("SIGNALOR_LOGO_URL")
+    or "https://res.cloudinary.com/dui7h1n3d/image/upload/q_auto/f_auto/v1779273045/icon_mitiu2.svg"
+)
+SIGNALOR_BRAND_PRIMARY = "#e04a3d"
 
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
@@ -272,8 +332,30 @@ CORS_ALLOWED_ORIGINS = [
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     if origin.strip()
 ]
+# The onboarding gate sends a custom X-Onboarding-Token header. It isn't in
+# django-cors-headers' default allow-list, so without this the browser passes
+# the preflight (OPTIONS 200) but blocks the actual request — the FE then shows
+# "Cannot reach the server." Extend the defaults rather than replace them.
+CORS_ALLOW_HEADERS = (*default_cors_headers, "x-onboarding-token")
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
     }
 }
+
+# ── Celery ───────────────────────────────────────────────────────────────
+# Today only the sitemap audit task (apps.analyzer.celery_tasks) is on
+# Celery; everything else still uses threading.Thread. When CELERY_BROKER_URL
+# is unset, tasks run eagerly in-process so dev / tests don't need a worker.
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", os.getenv("REDIS_URL", ""))
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "")
+CELERY_TASK_ALWAYS_EAGER = not bool(CELERY_BROKER_URL)
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_TIME_LIMIT = 60 * 30  # 30-minute hard ceiling per task
+CELERY_TASK_SOFT_TIME_LIMIT = 60 * 25
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "UTC"

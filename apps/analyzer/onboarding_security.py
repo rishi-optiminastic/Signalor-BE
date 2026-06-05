@@ -19,18 +19,29 @@ Why this stops the screenshot attack:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import requests
 from django.conf import settings
 from django.core import signing
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
 _SALT = "signalor.analyzer.onboarding.v1"
 _DEFAULT_MAX_AGE = 900  # 15 min — long enough for the full onboarding flow
+_CONSUMED_PREFIX = "signalor:onboarding:consumed:"
 
 _TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+
+def _consumed_key(token: str) -> str:
+    # Hash so we never store the raw signed payload in cache. SHA-256 is
+    # overkill for an opaque lookup key but it's cheap and avoids any worry
+    # about cache poisoning via long keys.
+    h = hashlib.sha256(token.encode("utf-8", errors="ignore")).hexdigest()
+    return f"{_CONSUMED_PREFIX}{h}"
 
 
 def mint_token(client_ip: str) -> str:
@@ -42,6 +53,12 @@ def verify_token(token: str, client_ip: str, max_age: int | None = None) -> tupl
     """
     Returns (ok, reason). ``reason`` is empty on success, else a short tag
     suitable for logging / 401 responses (never leaks signing internals).
+
+    Also rejects tokens that have already been consumed by a previous
+    successful ``consume_token()`` call. Callers that need single-use
+    semantics MUST call ``consume_token(token)`` after a successful verify.
+    Reading the consumed-set here lets us reject reuse cheaply before we
+    return ok=True.
     """
     if not token:
         return False, "missing"
@@ -65,7 +82,75 @@ def verify_token(token: str, client_ip: str, max_age: int | None = None) -> tupl
         # side is empty so misconfigured proxies don't lock everyone out.)
         return False, "ip_mismatch"
 
+    if cache.get(_consumed_key(token)) is not None:
+        return False, "consumed"
+
     return True, ""
+
+
+def consume_token(token: str, ttl: int | None = None) -> None:
+    """Mark a token consumed so subsequent verifies return ("consumed").
+
+    The consumed marker lives for at least the token's max age so a replay
+    after the token "naturally" expires also fails fast (already-expired
+    signatures already fail, this is belt-and-suspenders).
+    """
+    if not token:
+        return
+    cache.set(_consumed_key(token), "1", timeout=ttl or _DEFAULT_MAX_AGE)
+
+
+def subscriber_bypass(email: str | None) -> bool:
+    """Return True when the caller is identified enough to skip the
+    /onboarding-token round-trip:
+
+    - Internal (@optiminastic.com etc.) email
+    - Active paying subscription
+
+    Historically this also returned True for anyone with an existing
+    Organization row — but that opened the gate forever for any address
+    that had ever onboarded, which is exactly the replay path described in
+    issue #16 (an internal test email made the endpoint fully open). The
+    org-history bypass has been removed; gated endpoints must use a fresh
+    onboarding token unless the caller is internal or actively subscribed.
+    """
+    from apps.accounts.models import Subscription
+    from apps.accounts.subscription_utils import is_internal_email
+
+    if is_internal_email(email):
+        return True
+    em = (email or "").strip().lower()
+    if not em:
+        return False
+    try:
+        if Subscription.objects.get(email=em).is_active:
+            return True
+    except Subscription.DoesNotExist:
+        pass
+    return False
+
+
+def gate_onboarding_endpoint(request, email: str | None = None) -> tuple[bool, str]:
+    """
+    Gate a public onboarding endpoint with the X-Onboarding-Token unless the
+    caller is already an active subscriber (or internal email).
+
+    On a successful token verify, this function ALSO consumes the token —
+    callers can rely on the gate to enforce single-use semantics without an
+    extra ``consume_token()`` call.
+
+    Returns (ok, reason). On failure, the caller should respond with 401 and
+    surface the reason in the body.
+    """
+    if subscriber_bypass(email):
+        return True, ""
+    from core.middleware import _client_ip
+
+    token = request.headers.get("X-Onboarding-Token", "")
+    ok, reason = verify_token(token, _client_ip(request))
+    if ok:
+        consume_token(token)
+    return ok, reason
 
 
 def turnstile_enabled() -> bool:

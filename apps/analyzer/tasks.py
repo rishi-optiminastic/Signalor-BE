@@ -8,20 +8,19 @@ from .models import (
     BrandVisibility,
     Competitor,
     PageScore,
-    Recommendation,
     PromptTrack,
-    PromptResult,
+    Recommendation,
 )
-from .pipeline.brand_naming import visibility_brand_label
-from .pipeline.brand_visibility import run_brand_visibility
 from .pipeline.aggregator import compute_composite, compute_static_composite, detect_industry
 from .pipeline.ai_visibility import score_ai_visibility
+from .pipeline.brand_naming import visibility_brand_label
+from .pipeline.brand_visibility import run_brand_visibility
 from .pipeline.competitors import discover_competitors
 from .pipeline.content import score_content
-from .pipeline.crawler import crawl_page, CrawlResult
+from .pipeline.crawler import CrawlResult, crawl_page
 from .pipeline.eeat import score_eeat
 from .pipeline.entity import score_entity
-from .pipeline.llm import start_log_collection, get_collected_logs
+from .pipeline.llm import get_collected_logs, start_log_collection
 from .pipeline.recommendations import generate_recommendations
 from .pipeline.schema import score_schema
 from .pipeline.technical import score_technical
@@ -29,11 +28,37 @@ from .pipeline.technical import score_technical
 logger = logging.getLogger("apps")
 
 
+def _crawl_result_from_html(url: str, html: str, *, min_len: int = 50) -> CrawlResult | None:
+    """Build a scoreable CrawlResult from pre-fetched HTML (no live crawl).
+
+    Returns None when the HTML is too short to analyze meaningfully. Shared by
+    the integration and Next.js-snapshot fallbacks so they populate the exact
+    same fields the live crawler would (html/soup/text/internal_links/is_https).
+    """
+    from bs4 import BeautifulSoup
+
+    from .pipeline.utils import extract_internal_links, extract_text
+
+    if not html or len(html.strip()) < min_len:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    text = extract_text(soup)
+    return CrawlResult(
+        url=url,
+        status_code=200,
+        html=html,
+        soup=soup,
+        text=text,
+        internal_links=extract_internal_links(soup, url),
+        load_time=0.0,
+        error="",
+        is_https=url.startswith("https"),
+    )
+
+
 def _crawl_via_integration(run: AnalysisRun) -> CrawlResult | None:
     """Fallback: fetch page content via Shopify/WordPress API when public crawl fails."""
     from apps.integrations.models import Integration
-    from bs4 import BeautifulSoup
-    from .pipeline.utils import extract_text, extract_internal_links
 
     if not run.organization:
         return None
@@ -49,53 +74,100 @@ def _crawl_via_integration(run: AnalysisRun) -> CrawlResult | None:
 
     try:
         from .auto_fix import _read_page_content
+
         html_content = _read_page_content(integration, run.url)
 
-        if not html_content:
+        result = _crawl_result_from_html(run.url, html_content or "")
+        if result is None:
+            logger.warning("Run %d: integration content missing/too short, skipping", run.id)
             return None
 
-        # Reject content too short to analyze meaningfully
-        if len(html_content.strip()) < 50:
-            logger.warning("Run %d: integration content too short (%d chars), skipping", run.id, len(html_content))
-            return None
-
-        # Build a CrawlResult from the API content
-        soup = BeautifulSoup(html_content, "html.parser")
-        text = extract_text(soup)
-        result = CrawlResult(
-            url=run.url,
-            status_code=200,
-            html=html_content,
-            soup=soup,
-            text=text,
-            internal_links=extract_internal_links(soup, run.url),
-            load_time=0.0,
-            error="",
-            is_https=run.url.startswith("https"),
+        logger.info(
+            "Run %d: crawled via %s integration (API fallback, %d chars, %d text chars)",
+            run.id,
+            integration.provider,
+            len(result.html),
+            len(result.text),
         )
-        logger.info("Run %d: crawled via %s integration (API fallback, %d chars, %d text chars)",
-                     run.id, integration.provider, len(html_content), len(text))
         return result
     except Exception as e:
         logger.warning("Run %d: integration crawl fallback failed: %s", run.id, e)
         return None
 
 
+def _crawl_via_nextjs_snapshot(
+    run: AnalysisRun,
+) -> tuple[CrawlResult, list[CrawlResult]] | None:
+    """Fetch homepage + key routes via the @signalor/nextjs snapshot route.
+
+    Returns ``(homepage_crawl, additional_crawls)`` when the homepage renders,
+    else None so the caller falls back to the live crawl. Bypasses Cloudflare /
+    Turnstile because the SDK serves the site's own rendered HTML from its
+    deployment origin (e.g. *.vercel.app), not the public CDN-fronted URL.
+    """
+    from .services import nextjs_snapshot
+
+    config = nextjs_snapshot.get_config(run)
+    if config is None:
+        return None
+
+    origin, key_hash = config["origin"], config["key_hash"]
+    base = run.url.rstrip("/")
+
+    def _pull(path: str) -> CrawlResult | None:
+        try:
+            status, html = nextjs_snapshot.fetch_snapshot(origin, path, key_hash)
+        except Exception as exc:  # noqa: BLE001 — transport/JSON error → treat as miss
+            logger.warning("Run %d: snapshot pull failed for %s: %s", run.id, path, exc)
+            return None
+        if status != 200:
+            return None
+        # Map the route back onto the run's public URL so scorers and saved
+        # PageScores reference the real site, not the deployment origin.
+        page_url = f"{base}/" if path == "/" else f"{base}{path}"
+        return _crawl_result_from_html(page_url, html)
+
+    homepage = _pull("/")
+    if homepage is None or not homepage.ok:
+        return None
+
+    additional: list[CrawlResult] = []
+    for path in nextjs_snapshot.routes_for_run(run):
+        if path == "/":
+            continue
+        extra = _pull(path)
+        if extra is not None and extra.ok:
+            additional.append(extra)
+
+    logger.info(
+        "Run %d: snapshot crawl ok — homepage + %d pages via @signalor/nextjs",
+        run.id,
+        len(additional),
+    )
+    return homepage, additional
+
+
 def _save_probes_and_tracks(
-    run: AnalysisRun, probes_data: list[dict], brand_name: str, brand_url: str,
-    crawl_text: str = "", meta_description: str = "", site_pages: list[str] | None = None,
-    industry: str = "", country: str = "",
+    run: AnalysisRun,
+    probes_data: list[dict],
+    brand_name: str,
+    brand_url: str,
+    crawl_text: str = "",
+    meta_description: str = "",
+    site_pages: list[str] | None = None,
+    industry: str = "",
+    country: str = "",
 ):
     """Save AIVisibilityProbe rows and generate AI-powered brand-specific prompt tracks."""
     from apps.accounts.subscription_utils import get_plan_limits, is_plan_limits_enforcement_enabled
 
+    from .pipeline.citations import competitor_hosts_for_run, host_of, persist_prompt_result
     from .pipeline.prompt_tracker import (
-        generate_brand_prompts,
-        fire_prompt_across_engines,
-        compute_prompt_score,
         classify_prompt_intent_and_type,
+        compute_prompt_score,
+        fire_prompt_across_engines,
+        generate_brand_prompts,
     )
-    from .pipeline.citations import persist_prompt_result, host_of, competitor_hosts_for_run
 
     # Save visibility probes
     for probe in probes_data:
@@ -146,10 +218,16 @@ def _save_probes_and_tracks(
 
     def _process_prompt(prompt_text: str):
         intent, prompt_type = classify_prompt_intent_and_type(
-            prompt_text, brand_name, brand_url,
+            prompt_text,
+            brand_name,
+            brand_url,
         )
         engine_results = fire_prompt_across_engines(
-            prompt_text, brand_name, brand_url, runs=1, allowed_engines=allowed_engines,
+            prompt_text,
+            brand_name,
+            brand_url,
+            runs=1,
+            allowed_engines=allowed_engines,
         )
         return prompt_text, intent, prompt_type, engine_results
 
@@ -177,9 +255,15 @@ def _save_probes_and_tracks(
             for r in engine_results:
                 persist_prompt_result(track, r, brand_host, rival_hosts)
 
-            all_results = list(track.results.values(
-                "brand_mentioned", "sentiment", "rank_position", "confidence", "engine",
-            ))
+            all_results = list(
+                track.results.values(
+                    "brand_mentioned",
+                    "sentiment",
+                    "rank_position",
+                    "confidence",
+                    "engine",
+                )
+            )
             score_data = compute_prompt_score(all_results)
             track.score = score_data["score"]
             track.authority_score = score_data["authority_score"]
@@ -187,10 +271,16 @@ def _save_probes_and_tracks(
             track.structural_score = score_data["structural_score"]
             track.semantic_score = score_data["semantic_score"]
             track.third_party_score = score_data["third_party_score"]
-            track.save(update_fields=[
-                "score", "authority_score", "content_quality_score",
-                "structural_score", "semantic_score", "third_party_score",
-            ])
+            track.save(
+                update_fields=[
+                    "score",
+                    "authority_score",
+                    "content_quality_score",
+                    "structural_score",
+                    "semantic_score",
+                    "third_party_score",
+                ]
+            )
         except Exception as exc:
             logger.warning("PromptTrack persist failed for run %d: %s", run.id, exc)
 
@@ -213,9 +303,7 @@ def _score_competitor_static(url: str) -> tuple[dict | None, float]:
     eeat_score_val, eeat_details = score_eeat(crawl, skip_gemini=True)
     technical_score_val, technical_details = score_technical(crawl)
 
-    composite = compute_static_composite(
-        content_score, schema_score_val, eeat_score_val, technical_score_val
-    )
+    composite = compute_static_composite(content_score, schema_score_val, eeat_score_val, technical_score_val)
 
     page_data = {
         "url": url,
@@ -245,21 +333,30 @@ def _run_partial_analysis(run: AnalysisRun, crawl):
     _update_status(run, AnalysisRun.Status.ANALYZING, 20)
 
     # Content, schema, eeat all need HTML — score 0 with explanation
-    content_score, content_details = 0.0, {
-        "checks": {"crawl_failed": True},
-        "findings": [],
-        "note": f"Page content could not be accessed: {crawl.error}",
-    }
-    schema_score_val, schema_details = 0.0, {
-        "checks": {"crawl_failed": True},
-        "findings": [],
-        "note": f"Schema markup could not be checked: {crawl.error}",
-    }
-    eeat_score_val, eeat_details = 0.0, {
-        "checks": {"crawl_failed": True},
-        "findings": [],
-        "note": f"E-E-A-T signals could not be analyzed: {crawl.error}",
-    }
+    content_score, content_details = (
+        0.0,
+        {
+            "checks": {"crawl_failed": True},
+            "findings": [],
+            "note": f"Page content could not be accessed: {crawl.error}",
+        },
+    )
+    schema_score_val, schema_details = (
+        0.0,
+        {
+            "checks": {"crawl_failed": True},
+            "findings": [],
+            "note": f"Schema markup could not be checked: {crawl.error}",
+        },
+    )
+    eeat_score_val, eeat_details = (
+        0.0,
+        {
+            "checks": {"crawl_failed": True},
+            "findings": [],
+            "note": f"E-E-A-T signals could not be analyzed: {crawl.error}",
+        },
+    )
 
     _update_status(run, AnalysisRun.Status.ANALYZING, 40)
 
@@ -312,15 +409,22 @@ def _run_partial_analysis(run: AnalysisRun, crawl):
     _update_status(run, AnalysisRun.Status.ANALYZING, 80)
 
     _save_probes_and_tracks(
-        run, probes_data, run.brand_name or run.url, run.url,
+        run,
+        probes_data,
+        run.brand_name or run.url,
+        run.url,
         crawl_text=crawl.text[:2000] if crawl.text else "",
     )
 
     _update_status(run, AnalysisRun.Status.SCORING, 85)
 
     composite = compute_composite(
-        content_score, schema_score_val, eeat_score_val,
-        technical_score_val, entity_score_val, ai_vis_score,
+        content_score,
+        schema_score_val,
+        eeat_score_val,
+        technical_score_val,
+        entity_score_val,
+        ai_vis_score,
     )
 
     PageScore.objects.create(
@@ -392,6 +496,7 @@ def run_single_page_analysis(run_id: int):
         storefront_password = ""
         if run.organization:
             from apps.integrations.models import Integration
+
             try:
                 integration = Integration.objects.filter(
                     organization=run.organization,
@@ -406,12 +511,23 @@ def run_single_page_analysis(run_id: int):
         if not storefront_password:
             storefront_password = run.storefront_password or ""
 
-        from .pipeline.crawler import crawl_site, SiteMap
+        from .pipeline.crawler import SiteMap, crawl_site
 
-        homepage_crawl, site_map, additional_crawls = crawl_site(
-            run.url, storefront_password=storefront_password, max_pages=12,
-        )
-        crawl = homepage_crawl  # Primary crawl for backward compatibility
+        # Prefer the @signalor/nextjs snapshot when available — it serves the
+        # site's own rendered HTML from its deployment origin, bypassing
+        # Cloudflare/Turnstile that would block a live crawl. Falls through to
+        # the normal crawl when the SDK isn't installed or the pull fails.
+        snapshot = _crawl_via_nextjs_snapshot(run)
+        if snapshot is not None:
+            crawl, additional_crawls = snapshot
+            site_map = SiteMap(homepage=run.url, pages=[c.url for c in additional_crawls])
+        else:
+            homepage_crawl, site_map, additional_crawls = crawl_site(
+                run.url,
+                storefront_password=storefront_password,
+                max_pages=12,
+            )
+            crawl = homepage_crawl  # Primary crawl for backward compatibility
 
         if not crawl.ok:
             # Try fetching via connected integration (handles password-protected stores)
@@ -421,10 +537,17 @@ def run_single_page_analysis(run_id: int):
             else:
                 # Check if this is a hard failure (no point in partial analysis)
                 err = crawl.error or ""
-                is_hard_fail = any(kw in err.lower() for kw in [
-                    "password-protected", "domain not found", "ssl certificate",
-                    "connection refused", "not found (404)", "permanently removed",
-                ])
+                is_hard_fail = any(
+                    kw in err.lower()
+                    for kw in [
+                        "password-protected",
+                        "domain not found",
+                        "ssl certificate",
+                        "connection refused",
+                        "not found (404)",
+                        "permanently removed",
+                    ]
+                )
                 if is_hard_fail:
                     run.status = AnalysisRun.Status.FAILED
                     run.error_message = crawl.error
@@ -439,21 +562,29 @@ def run_single_page_analysis(run_id: int):
 
         # Content hashing for change detection
         import hashlib
+
         content_hash = hashlib.sha256((crawl.text or "").encode()).hexdigest()
         run.content_hash = content_hash
         run.save(update_fields=["content_hash"])
 
         # Check if content changed since last run
-        prev_run = AnalysisRun.objects.filter(
-            url=run.url, status="complete"
-        ).exclude(pk=run.pk).order_by("-created_at").first()
+        prev_run = (
+            AnalysisRun.objects.filter(url=run.url, status="complete")
+            .exclude(pk=run.pk)
+            .order_by("-created_at")
+            .first()
+        )
 
         if prev_run and prev_run.content_hash == content_hash:
             # Content unchanged — reuse previous scores for static pillars
             prev_page = prev_run.page_scores.filter(url=run.url).first()
             if prev_page:
-                logger.info("Run %d: content unchanged (hash=%s), reusing static scores from run %d",
-                            run_id, content_hash[:12], prev_run.pk)
+                logger.info(
+                    "Run %d: content unchanged (hash=%s), reusing static scores from run %d",
+                    run_id,
+                    content_hash[:12],
+                    prev_run.pk,
+                )
 
         # Detect industry for adaptive weights
         industry = detect_industry(crawl.soup, crawl.text)
@@ -468,7 +599,6 @@ def run_single_page_analysis(run_id: int):
         # Score additional pages and aggregate
         all_content_scores = [content_score]
         all_schema_scores = [schema_score_val]
-        all_eeat_scores_static = []
         page_scores_data = []
 
         for extra_crawl in additional_crawls:
@@ -479,13 +609,15 @@ def run_single_page_analysis(run_id: int):
                 s_score, s_details = score_schema(extra_crawl)
                 all_content_scores.append(c_score)
                 all_schema_scores.append(s_score)
-                page_scores_data.append({
-                    "url": extra_crawl.url,
-                    "content_score": c_score,
-                    "schema_score": s_score,
-                    "content_details": c_details,
-                    "schema_details": s_details,
-                })
+                page_scores_data.append(
+                    {
+                        "url": extra_crawl.url,
+                        "content_score": c_score,
+                        "schema_score": s_score,
+                        "content_details": c_details,
+                        "schema_details": s_details,
+                    }
+                )
             except Exception as exc:
                 logger.warning("Scoring failed for %s: %s", extra_crawl.url, exc)
 
@@ -548,7 +680,9 @@ def run_single_page_analysis(run_id: int):
             return score_entity(crawl, industry=industry, override_brand=brand_name)
 
         def _run_ai_vis():
-            return score_ai_visibility(crawl, target_country=(run.country or "").strip() or None, override_brand=brand_name)
+            return score_ai_visibility(
+                crawl, target_country=(run.country or "").strip() or None, override_brand=brand_name
+            )
 
         def _run_brand_vis():
             return run_brand_visibility(brand_name, run.url)
@@ -593,7 +727,7 @@ def run_single_page_analysis(run_id: int):
         _meta_desc = ""
         if crawl.soup:
             _md = crawl.soup.find("meta", attrs={"name": "description"})
-            _meta_desc = (_md["content"].strip() if _md and _md.get("content") else "")
+            _meta_desc = _md["content"].strip() if _md and _md.get("content") else ""
 
         # Get page titles from discovered site pages
         _site_page_titles = []
@@ -604,7 +738,10 @@ def run_single_page_analysis(run_id: int):
                     _site_page_titles.append(t.get_text(strip=True))
 
         _save_probes_and_tracks(
-            run, probes_data, run.brand_name or run.url, run.url,
+            run,
+            probes_data,
+            run.brand_name or run.url,
+            run.url,
             crawl_text=crawl.text[:2000],
             meta_description=_meta_desc,
             site_pages=_site_page_titles or None,
@@ -618,9 +755,12 @@ def run_single_page_analysis(run_id: int):
         # Score smoothing: blend LLM-dependent pillars with previous run
         # Static pillars (content, schema, technical) are NOT smoothed — they reflect current state
         # LLM pillars (eeat, entity, ai_visibility) are smoothed to reduce noise
-        prev_page = PageScore.objects.filter(
-            url=run.url, analysis_run__status="complete"
-        ).exclude(analysis_run=run).order_by("-created_at").first()
+        prev_page = (
+            PageScore.objects.filter(url=run.url, analysis_run__status="complete")
+            .exclude(analysis_run=run)
+            .order_by("-created_at")
+            .first()
+        )
 
         SMOOTH_ALPHA = 0.4  # weight for NEW score
         if prev_page:
@@ -632,8 +772,16 @@ def run_single_page_analysis(run_id: int):
             entity_score_val = prev_page.entity_score * (1 - SMOOTH_ALPHA) + entity_score_val * SMOOTH_ALPHA
             ai_vis_score = prev_page.ai_visibility_score * (1 - SMOOTH_ALPHA) + ai_vis_score * SMOOTH_ALPHA
 
-            logger.info("Run %d: smoothed scores - E-E-A-T: %.1f->%.1f, Entity: %.1f->%.1f, AI Vis: %.1f->%.1f",
-                        run_id, raw_eeat, eeat_score_val, raw_entity, entity_score_val, raw_ai_vis, ai_vis_score)
+            logger.info(
+                "Run %d: smoothed scores - E-E-A-T: %.1f->%.1f, Entity: %.1f->%.1f, AI Vis: %.1f->%.1f",
+                run_id,
+                raw_eeat,
+                eeat_score_val,
+                raw_entity,
+                entity_score_val,
+                raw_ai_vis,
+                ai_vis_score,
+            )
 
             # Store raw scores for transparency
             eeat_details["raw_score"] = raw_eeat
@@ -642,8 +790,12 @@ def run_single_page_analysis(run_id: int):
             ai_vis_details["raw_score"] = raw_ai_vis
 
         composite = compute_composite(
-            content_score, schema_score_val, eeat_score_val,
-            technical_score_val, entity_score_val, ai_vis_score,
+            content_score,
+            schema_score_val,
+            eeat_score_val,
+            technical_score_val,
+            entity_score_val,
+            ai_vis_score,
             industry=industry,
         )
 
@@ -676,10 +828,14 @@ def run_single_page_analysis(run_id: int):
                     content_details=pd["content_details"],
                     schema_score=pd["schema_score"],
                     schema_details=pd["schema_details"],
-                    eeat_score=0, eeat_details={},
-                    technical_score=0, technical_details={},
-                    entity_score=0, entity_details={},
-                    ai_visibility_score=0, ai_visibility_details={},
+                    eeat_score=0,
+                    eeat_details={},
+                    technical_score=0,
+                    technical_details={},
+                    entity_score=0,
+                    entity_details={},
+                    ai_visibility_score=0,
+                    ai_visibility_details={},
                     composite_score=0,
                 )
             except Exception:
@@ -739,9 +895,7 @@ def run_single_page_analysis(run_id: int):
                             relevance_score=comp_data.get("relevance_score"),
                         )
                         if page_data:
-                            comp_page = PageScore.objects.create(
-                                analysis_run=run, **page_data
-                            )
+                            comp_page = PageScore.objects.create(analysis_run=run, **page_data)
                             comp.page_score = comp_page
                             comp.composite_score = comp_composite
                             comp.scored = True
@@ -751,6 +905,16 @@ def run_single_page_analysis(run_id: int):
         except Exception as exc:
             logger.warning("Competitor discovery failed for run %d: %s", run_id, exc)
 
+        # Competitors are discovered AFTER the prompts fired, so their citations
+        # were persisted with is_competitor=False (empty host set at the time).
+        # Back-fill the flag now that we know the competitor hosts.
+        try:
+            from .pipeline.citations import reclassify_competitor_citations
+
+            reclassify_competitor_citations(run)
+        except Exception as exc:
+            logger.warning("Competitor citation reclassify failed for run %d: %s", run_id, exc)
+
         # Finalize
         run.composite_score = composite
         run.status = AnalysisRun.Status.COMPLETE
@@ -758,6 +922,7 @@ def run_single_page_analysis(run_id: int):
         run.llm_logs = get_collected_logs()
         run.save()
         logger.info("Analysis complete for run %d: score %.1f", run_id, composite)
+        _generate_and_fire_competitive_prompts(run)
 
     except Exception as exc:
         logger.error("Analysis failed for run %d: %s", run_id, exc, exc_info=True)
@@ -766,12 +931,209 @@ def run_single_page_analysis(run_id: int):
         run.save()
 
 
-def start_analysis_task(run_id: int):
-    """Start the analysis in a background thread."""
+def _domain_label(url: str) -> str:
+    """Cheap fallback brand label when AnalysisRun.brand_name is empty."""
+    from urllib.parse import urlparse
+
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"https://{raw}"
     try:
+        host = urlparse(raw).netloc.removeprefix("www.")
+    except Exception:
+        return ""
+    return host.split(".")[0] if host else ""
+
+
+def _fire_competitive_prompt_fast(track: PromptTrack, brand_name: str, brand_url: str) -> None:
+    """Light-weight fire for auto-generated competitive prompts. Uses runs=1
+    instead of the default 3 (3x fewer LLM calls per prompt) since the
+    Competitive Prompts page is a discovery surface, not a precision-ranking
+    one — the user values "see prompts and which engines mention competitors"
+    over "average across 3 runs"."""
+    from django.db import close_old_connections
+
+    from .pipeline.citations import (
+        competitor_hosts_for_run,
+        host_of,
+        persist_prompt_result,
+    )
+    from .pipeline.prompt_tracker import (
+        compute_prompt_score,
+        fire_prompt_across_engines,
+    )
+
+    close_old_connections()
+    try:
+        engine_results = fire_prompt_across_engines(
+            track.prompt_text,
+            brand_name,
+            brand_url,
+            runs=1,  # ← key speed win
+            allowed_engines=None,
+        )
+        brand_host = host_of(brand_url)
+        rival_hosts = competitor_hosts_for_run(track.analysis_run)
+        for r in engine_results:
+            persist_prompt_result(track, r, brand_host, rival_hosts)
+
+        all_res = list(
+            track.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine")
+        )
+        sd = compute_prompt_score(all_res)
+        track.score = sd["score"]
+        track.authority_score = sd["authority_score"]
+        track.content_quality_score = sd["content_quality_score"]
+        track.structural_score = sd["structural_score"]
+        track.semantic_score = sd["semantic_score"]
+        track.third_party_score = sd["third_party_score"]
+        track.save(
+            update_fields=[
+                "score",
+                "authority_score",
+                "content_quality_score",
+                "structural_score",
+                "semantic_score",
+                "third_party_score",
+            ]
+        )
+    except Exception:
+        logger.exception(
+            "Fast competitive fire failed for track %d (run %d)",
+            track.id,
+            track.analysis_run_id,
+        )
+
+
+def _generate_and_fire_competitive_prompts(run: AnalysisRun) -> None:
+    """Auto-generate 10 buyer-intent prompts for this brand and fire them
+    through the existing engine pipeline. Runs once per AnalysisRun (idempotent
+    on prompt_type=COMPETITIVE rows) and dispatches the actual engine fires to
+    a background thread pool so it never delays run completion.
+
+    Speed budget: runs=1 (vs default 3) on each prompt fire + 4-way parallel
+    pool over the 10 prompts → roughly the time of 3 prompts firing serially.
+
+    Result: the per-brand Competitive Prompt Insights page populates without
+    the user having to trigger anything from the UI.
+    """
+    try:
+        # Idempotency: count-based, not existence-based. Onboarding can plant a
+        # single COMPETITIVE-typed prompt (e.g. the hardcoded "Compare X with
+        # competitors" fallback from GeneratePromptsView), which would trip a
+        # naive .exists() check and skip generation entirely. Our auto-gen
+        # always produces 10 prompts, so saturation = >=10 already present.
+        existing_competitive = run.prompt_tracks.filter(
+            prompt_type=PromptTrack.PromptSurfaceType.COMPETITIVE,
+            is_custom=False,
+            deleted_at__isnull=True,
+        ).count()
+        if existing_competitive >= 10:
+            logger.info(
+                "Competitive prompts at saturation (%d>=10) for run %d; skipping auto-gen.",
+                existing_competitive,
+                run.id,
+            )
+            return
+
+        from .pipeline.prompt_tracker import (
+            classify_prompt_intent_and_type,
+            generate_brand_prompts,
+        )
+
+        brand = (run.brand_name or "").strip() or _domain_label(run.url)
+        url = (run.url or "").strip()
+
+        prompts = generate_brand_prompts(
+            brand_name=brand,
+            brand_url=url,
+            country=(run.country or "").strip(),
+            count=10,
+        )
+        if not prompts:
+            logger.info("Auto-gen returned no competitive prompts for run %d.", run.id)
+            return
+
+        # Persist tracks first so the Prompts page renders the queue immediately
+        # while engine fires populate results asynchronously.
+        tracks: list[PromptTrack] = []
+        for prompt_text in prompts:
+            intent, _ = classify_prompt_intent_and_type(prompt_text, brand, url)
+            tracks.append(
+                PromptTrack.objects.create(
+                    analysis_run=run,
+                    prompt_text=prompt_text,
+                    is_custom=False,
+                    intent=intent,
+                    prompt_type=PromptTrack.PromptSurfaceType.COMPETITIVE,
+                )
+            )
+
+        def _fire_all():
+            # Parallel pool: 4 prompts in flight, each one fires its engines
+            # in parallel internally. Keeps total wall-clock to ~3x slowest
+            # engine round-trip instead of 10x.
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = [pool.submit(_fire_competitive_prompt_fast, t, brand, url) for t in tracks]
+                for fut in as_completed(futures):
+                    try:
+                        fut.result()
+                    except Exception:
+                        # _fire_competitive_prompt_fast already logs internally.
+                        pass
+
+        threading.Thread(target=_fire_all, daemon=True).start()
+        logger.info(
+            "Queued %d competitive prompts for run %d (runs=1, pool=4).",
+            len(tracks),
+            run.id,
+        )
+
+    except Exception:
+        logger.exception("Auto-competitive prompt generation failed for run %d", run.id)
+
+
+def _kickoff_sitemap_audit(run_id: int) -> None:
+    """Create a SitemapAudit row and dispatch the crawl to a Celery worker.
+
+    Called from start_analysis_task so the sitemap crawl runs in PARALLEL
+    with the main page analysis — the Sitemap tab shows progress immediately
+    instead of staying on the "Run audit" empty state until the main run
+    finishes. Failures here are non-fatal: the main analysis is independent.
+
+    When CELERY_BROKER_URL is unset (local dev), the task runs eagerly
+    in-process via CELERY_TASK_ALWAYS_EAGER.
+    """
+    try:
+        from .celery_tasks import run_sitemap_audit_task
+        from .models import SitemapAudit
+        from .pipeline.sitemap_audit import HARD_URL_CAP
+
         run = AnalysisRun.objects.get(pk=run_id)
-    except AnalysisRun.DoesNotExist:
+        audit = SitemapAudit.objects.create(
+            analysis_run=run,
+            status=SitemapAudit.Status.QUEUED,
+            crawl_limit=HARD_URL_CAP,
+        )
+        run_sitemap_audit_task.delay(audit.id)
+    except Exception as exc:
+        logger.warning("Auto sitemap audit kickoff failed for run %d: %s", run_id, exc)
+
+
+def start_analysis_task(run_id: int):
+    """Start the main analysis in a background thread and fire the sitemap
+    audit in parallel so the Sitemap tab is populated as soon as possible."""
+    if not AnalysisRun.objects.filter(pk=run_id).exists():
         return
 
     thread = threading.Thread(target=run_single_page_analysis, args=(run_id,), daemon=True)
     thread.start()
+
+    # Sibling sitemap audit — runs concurrently with the main analysis above.
+    # Dispatch in its own thread: with no Celery broker (local dev) .delay()
+    # runs EAGERLY in-process, so calling it inline would block the HTTP
+    # response for the full sitemap crawl and trip the frontend's request
+    # timeout. A thread keeps /analyze/ fast in both eager and brokered modes.
+    threading.Thread(target=_kickoff_sitemap_audit, args=(run_id,), daemon=True).start()

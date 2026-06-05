@@ -13,15 +13,25 @@ services:
 
   - type: web
     name: signalor-backend
-    runtime: python
+    runtime: docker
     plan: starter
     region: oregon
-    buildCommand: ./build.sh
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Migrations + drift reconciliation run once per deploy before traffic
+    # cuts over. Replaces the corresponding steps that used to live in
+    # build.sh (no longer used since the web service runs from the image).
+    preDeployCommand: "python scripts/reconcile_migrations.py && python manage.py migrate --no-input"
     startCommand: opentelemetry-instrument gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 600
     healthCheckPath: /api/auth/get-session
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
+      # Re-enable the Playwright-backed screenshot capture in
+      # apps/analyzer/services/content_optimisation.py. We disabled it
+      # while the binary was getting wiped on the Python runtime; on
+      # this Docker image chromium is baked into the layer so the
+      # capture works reliably.
+      - key: ENABLE_SERVER_SCREENSHOTS
+        value: "1"
       # --- OpenTelemetry → Better Stack ---
       - key: OTEL_SERVICE_NAME
         value: signalor-backend
@@ -53,6 +63,14 @@ services:
           name: signalor-db
           property: connectionString
       - key: REDIS_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      # Same Redis instance is reused as Celery's broker — keeps infra simple.
+      # Without this, .delay() falls back to CELERY_TASK_ALWAYS_EAGER and the
+      # web process would run sitemap audits inline, defeating the worker.
+      - key: CELERY_BROKER_URL
         fromService:
           type: redis
           name: signalor-redis
@@ -144,6 +162,57 @@ services:
       - key: B2_ENDPOINT
         sync: false
       - key: B2_REGION
+        sync: false
+
+  - type: worker
+    name: signalor-celery-worker
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: ./build.sh
+    # Single worker process, modest concurrency — sitemap audits are mostly
+    # network-bound. Bump --concurrency when more tasks land on Celery.
+    startCommand: celery -A config worker --loglevel=info --concurrency=2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      # Worker stays on the Python runtime — sitemap audits use plain
+      # requests, no Playwright needed here. If that ever changes, switch
+      # this service to runtime: docker too (using ./Dockerfile).
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: signalor-backend
+          envVarKey: SECRET_KEY
+      - key: DATABASE_URL
+        fromDatabase:
+          name: signalor-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      # Celery picks up REDIS_URL via settings.base if CELERY_BROKER_URL is
+      # unset; setting it explicitly here documents the intent.
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      - key: ALLOWED_HOSTS
+        value: api.signalor.ai
+      - key: FRONTEND_BASE_URL
+        value: https://signalor.ai
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
         sync: false
 
   - type: cron

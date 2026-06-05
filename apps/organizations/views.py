@@ -5,22 +5,50 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.analyzer.onboarding_security import gate_onboarding_endpoint
+
 from .models import Organization
 from .serializers import OnboardSerializer, OrganizationSerializer
+from .throttling import OnboardEmailThrottle
+from .utils import normalize_url
 
 logger = logging.getLogger("apps")
 
 
 class OnboardView(APIView):
+    """Create an Organization for a brand-new onboarding session.
+
+    Security gates (in order):
+      1. Per-email throttle (5/hour) — limits damage even from a botnet
+         that's rotating IPs to dodge the global per-IP middleware.
+      2. ``X-Onboarding-Token`` single-use signed token from
+         ``/api/analyzer/onboarding-start/`` (bypassed only for internal
+         emails and active paying subscribers — never bypassed just because
+         an org already exists for this email; see issue #16).
+      3. Plan limit (``project_limit_reached``).
+      4. Duplicate detection by (owner_email, normalized_url) — returns
+         409 + the existing org so the FE can switch to it instead of
+         creating a dupe.
+    """
+
     permission_classes = [AllowAny]
+    throttle_classes = [OnboardEmailThrottle]
 
     def post(self, request):
         serializer = OnboardSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         email = serializer.validated_data["email"]
+        url = serializer.validated_data.get("url", "")
 
-        # Enforce project limit
+        ok, reason = gate_onboarding_endpoint(request, email=email)
+        if not ok:
+            logger.warning("onboard gate fail email=%s reason=%s", email, reason)
+            return Response(
+                {"detail": "Onboarding session required.", "reason": reason},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         from apps.accounts.subscription_utils import plan_limit_error_response_dict, project_limit_reached
 
         reached, msg = project_limit_reached(email)
@@ -29,6 +57,28 @@ class OnboardView(APIView):
                 plan_limit_error_response_dict(msg),
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        normalized = normalize_url(url)
+        if normalized:
+            existing = (
+                Organization.objects.filter(owner_email=email, normalized_url=normalized)
+                .order_by("created_at")
+                .first()
+            )
+            if existing is not None:
+                logger.info(
+                    "onboard dedup hit email=%s normalized_url=%s existing_id=%s",
+                    email,
+                    normalized,
+                    existing.id,
+                )
+                return Response(
+                    {
+                        "detail": "An organization for this domain already exists.",
+                        "organization": OrganizationSerializer(existing).data,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         org = serializer.save()
         logger.info("Organization created: %s for %s", org.name, email)

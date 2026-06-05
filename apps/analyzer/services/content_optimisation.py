@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 from urllib.parse import urlparse
 
@@ -38,6 +39,21 @@ from apps.analyzer.models import (
     ContentSuggestion,
     SitemapAudit,
     SitemapAuditPage,
+)
+
+# Server-side screenshot capture via Playwright is disabled by default
+# because Render's deploy snapshot does not reliably preserve the
+# chromium binary across deploys — install succeeded at build time but
+# the file vanished at runtime no matter where we pointed
+# PLAYWRIGHT_BROWSERS_PATH (project root, .venv/, even inside the
+# playwright package itself). Set ENABLE_SERVER_SCREENSHOTS=1 on a
+# host where the binary actually persists (e.g. local dev, Docker image
+# with chromium baked in) to re-enable. The FE handles the empty
+# preview cleanly with a "Couldn't generate a visual preview" placeholder.
+_SERVER_SCREENSHOTS_ENABLED = os.environ.get("ENABLE_SERVER_SCREENSHOTS", "").lower() in (
+    "1",
+    "true",
+    "yes",
 )
 
 logger = logging.getLogger("apps")
@@ -304,6 +320,10 @@ def _capture_page_render(url: str, storefront_password: str = "") -> dict:
     Returns empty fields on any failure — caller falls back gracefully.
     """
     empty = {"image": "", "elements": [], "viewport_width": _SCREENSHOT_VIEWPORT["width"]}
+    if not _SERVER_SCREENSHOTS_ENABLED:
+        # Disabled on hosts where chromium can't be relied on (Render today).
+        # FE renders the "Couldn't generate a visual preview" placeholder.
+        return empty
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
