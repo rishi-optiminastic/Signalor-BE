@@ -68,13 +68,19 @@ services:
     <<: *app
     environment:
       PORT: "8000"
-    # Reconcile + migrate before serving (replaces Render's preDeployCommand),
-    # then exec gunicorn so it becomes PID 1 and receives signals cleanly.
+      # scripts/reconcile_migrations.py runs as `python scripts/...`, which puts
+      # /app/scripts (not /app) on sys.path[0], so `import config` fails. Putting
+      # /app on PYTHONPATH makes the project package importable for that script.
+      PYTHONPATH: /app
+    # Migrate before serving, then exec gunicorn so it becomes PID 1 and
+    # receives signals cleanly. (We don't run scripts/reconcile_migrations.py:
+    # it patches Render/staging-specific migration drift that this fresh,
+    # self-hosted DB never has, and it assumes django_migrations already
+    # exists — which crashes the first boot on an empty DB.)
     command:
       - sh
       - -c
       - >
-        python scripts/reconcile_migrations.py &&
         python manage.py migrate --no-input &&
         exec opentelemetry-instrument gunicorn config.wsgi:application
         --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 600

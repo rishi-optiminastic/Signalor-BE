@@ -12,10 +12,7 @@ api2.signalor.ai {
 
 	# reverse_proxy forwards the original Host and sets X-Forwarded-Proto=https,
 	# which Django's SECURE_PROXY_SSL_HEADER / USE_X_FORWARDED_HOST rely on.
-	reverse_proxy web:8000 {
-		# Render's health check path — handy for `caddy` to know upstream is up.
-		health_uri /api/auth/get-session
-		health_interval 30s
-		health_timeout 5s
-	}
+	# No active health_uri: the app has no guaranteed-2xx unauthenticated path,
+	# and a 404 there would make Caddy 502 all traffic. Passive checks suffice.
+	reverse_proxy web:8000
 }
