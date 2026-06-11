@@ -1,30 +1,31 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import URLValidator
 from rest_framework import serializers
 
 from .models import (
+    ACHIEVEMENTS_INFO,
+    AgentLogEntry,
     AIVisibilityProbe,
     AnalysisRun,
+    BlogAutomationConfig,
+    BlogAutomationJob,
     BrandVisibility,
     Competitor,
     PageScore,
-    Recommendation,
-    UserAction,
-    UserGamification,
-    BlogAutomationConfig,
-    BlogAutomationJob,
-    PromptTrack,
-    PromptResult,
     PromptCitation,
-    ScheduledAnalysis,
-    SitemapAudit,
-    SitemapAuditPage,
-    AgentLogEntry,
-    SchemaWatch,
-    SchemaWatchPage,
+    PromptResult,
+    PromptTrack,
     RankAudit,
     RankQuery,
     RankResult,
-    ACHIEVEMENTS_INFO,
-    ACTION_TEMPLATES,
+    Recommendation,
+    ScheduledAnalysis,
+    SchemaWatch,
+    SchemaWatchPage,
+    SitemapAudit,
+    SitemapAuditPage,
+    UserAction,
+    UserGamification,
 )
 
 
@@ -34,37 +35,79 @@ class RecommendationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Recommendation
         fields = [
-            "id", "pillar", "priority", "title", "description",
-            "action", "impact_estimate", "category", "can_auto_fix", "why",
-            "steps", "xp_reward", "difficulty", "estimated_minutes", "finding_code", "finding_key",
+            "id",
+            "pillar",
+            "priority",
+            "title",
+            "description",
+            "action",
+            "impact_estimate",
+            "category",
+            "can_auto_fix",
+            "why",
+            "steps",
+            "xp_reward",
+            "difficulty",
+            "estimated_minutes",
+            "finding_code",
+            "finding_key",
         ]
 
     # Title keywords that indicate manual-only recommendations
     MANUAL_TITLE_KEYWORDS = [
-        "sitemap", "enable https", "page load speed", "improve page load",
-        "crawler blocked", "blocks automated", "too slow to crawl",
-        "wikipedia", "reddit", "google ai overview",
-        "brand into ai", "social profile", "brand website signal",
+        "sitemap",
+        "enable https",
+        "page load speed",
+        "improve page load",
+        "crawler blocked",
+        "blocks automated",
+        "too slow to crawl",
+        "wikipedia",
+        "reddit",
+        "google ai overview",
+        "brand into ai",
+        "social profile",
+        "brand website signal",
     ]
 
     # Fix types that can actually be auto-applied on any URL
     AUTO_FIX_TITLE_KEYWORDS = [
-        "llms.txt", "robots.txt", "ai meta", "ai-meta", "ai crawler",
-        "ai bot", "gptbot", "claudebot", "noindex",
+        "llms.txt",
+        "robots.txt",
+        "ai meta",
+        "ai-meta",
+        "ai crawler",
+        "ai bot",
+        "gptbot",
+        "claudebot",
+        "noindex",
     ]
 
     # Fix types that need a product/page URL — cannot auto-fix on homepage
     HOMEPAGE_MANUAL_TITLE_KEYWORDS = [
-        "meta description", "seo title", "title tag", "meta title",
-        "json-ld", "structured data", "schema",
-        "faq", "expert quote", "author attribution", "first-hand",
-        "about page", "contact page", "content", "keyword stuff",
-        "review", "comparison", "shipping", "product description",
+        "meta description",
+        "seo title",
+        "title tag",
+        "meta title",
+        "json-ld",
+        "structured data",
+        "schema",
+        "faq",
+        "expert quote",
+        "author attribution",
+        "first-hand",
+        "about page",
+        "contact page",
+        "content",
+        "keyword stuff",
+        "review",
+        "comparison",
+        "shipping",
+        "product description",
     ]
 
     def get_can_auto_fix(self, obj):
         title_lower = (obj.title or "").lower()
-        cat_lower = (obj.category or "").lower()
 
         # Always manual
         for kw in self.MANUAL_TITLE_KEYWORDS:
@@ -78,6 +121,7 @@ class RecommendationSerializer(serializers.ModelSerializer):
         if run_url:
             try:
                 from urllib.parse import urlparse
+
                 path = urlparse(run_url).path.rstrip("/")
                 is_homepage = not path or path == ""
             except Exception:
@@ -100,7 +144,11 @@ class AIVisibilityProbeSerializer(serializers.ModelSerializer):
     class Meta:
         model = AIVisibilityProbe
         fields = [
-            "id", "prompt_used", "llm_response", "brand_mentioned", "confidence",
+            "id",
+            "prompt_used",
+            "llm_response",
+            "brand_mentioned",
+            "confidence",
         ]
 
 
@@ -108,10 +156,21 @@ class PageScoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = PageScore
         fields = [
-            "id", "url", "content_score", "content_details",
-            "schema_score", "schema_details", "eeat_score", "eeat_details",
-            "technical_score", "technical_details", "entity_score", "entity_details",
-            "ai_visibility_score", "ai_visibility_details", "composite_score",
+            "id",
+            "url",
+            "content_score",
+            "content_details",
+            "schema_score",
+            "schema_details",
+            "eeat_score",
+            "eeat_details",
+            "technical_score",
+            "technical_details",
+            "entity_score",
+            "entity_details",
+            "ai_visibility_score",
+            "ai_visibility_details",
+            "composite_score",
         ]
 
 
@@ -119,9 +178,12 @@ class BrandVisibilitySerializer(serializers.ModelSerializer):
     class Meta:
         model = BrandVisibility
         fields = [
-            "google_score", "google_details",
-            "reddit_score", "reddit_details",
-            "web_mentions_score", "web_mentions_details",
+            "google_score",
+            "google_details",
+            "reddit_score",
+            "reddit_details",
+            "web_mentions_score",
+            "web_mentions_details",
             "social_presence_details",
             "ai_brand_facts",
             "overall_score",
@@ -134,10 +196,20 @@ class CompetitorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Competitor
         fields = [
-            "id", "name", "url", "industry",
-            "tier", "target_market", "geography", "pricing_model",
-            "estimated_revenue_band", "positioning", "relevance_score",
-            "composite_score", "scored", "page_score",
+            "id",
+            "name",
+            "url",
+            "industry",
+            "tier",
+            "target_market",
+            "geography",
+            "pricing_model",
+            "estimated_revenue_band",
+            "positioning",
+            "relevance_score",
+            "composite_score",
+            "scored",
+            "page_score",
         ]
 
 
@@ -145,8 +217,15 @@ class AnalysisRunListSerializer(serializers.ModelSerializer):
     class Meta:
         model = AnalysisRun
         fields = [
-            "id", "slug", "url", "country", "run_type", "status", "progress",
-            "composite_score", "created_at",
+            "id",
+            "slug",
+            "url",
+            "country",
+            "run_type",
+            "status",
+            "progress",
+            "composite_score",
+            "created_at",
         ]
 
 
@@ -161,9 +240,24 @@ class AnalysisRunDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = AnalysisRun
         fields = [
-            "id", "slug", "url", "brand_name", "display_brand_name", "country", "email", "run_type", "status", "progress",
-            "composite_score", "error_message", "created_at", "updated_at",
-            "page_scores", "competitors", "recommendations", "ai_probes",
+            "id",
+            "slug",
+            "url",
+            "brand_name",
+            "display_brand_name",
+            "country",
+            "email",
+            "run_type",
+            "status",
+            "progress",
+            "composite_score",
+            "error_message",
+            "created_at",
+            "updated_at",
+            "page_scores",
+            "competitors",
+            "recommendations",
+            "ai_probes",
             "brand_visibility",
         ]
 
@@ -173,19 +267,18 @@ class AnalysisRunDetailSerializer(serializers.ModelSerializer):
         return visibility_brand_label(getattr(obj, "url", "") or "", getattr(obj, "brand_name", "") or "")
 
 
+_url_validator = URLValidator(schemes=["http", "https"])
+
+
 class StartAnalysisSerializer(serializers.Serializer):
-    url = serializers.URLField(max_length=2048)
+    url = serializers.CharField(max_length=2048)
     run_type = serializers.ChoiceField(
         choices=AnalysisRun.RunType.choices,
         default=AnalysisRun.RunType.SINGLE_PAGE,
     )
     email = serializers.EmailField(required=False, allow_blank=True, default="")
-    brand_name = serializers.CharField(
-        max_length=255, required=False, allow_blank=True, default=""
-    )
-    country = serializers.CharField(
-        max_length=100, required=False, allow_blank=True, default=""
-    )
+    brand_name = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    country = serializers.CharField(max_length=100, required=False, allow_blank=True, default="")
     org_id = serializers.IntegerField(required=False, allow_null=True)
     # When true (onboarding / post-checkout launch), require org ownership, URL match, brand, and prompts.
     verify_org_workspace = serializers.BooleanField(required=False, default=False)
@@ -194,11 +287,16 @@ class StartAnalysisSerializer(serializers.Serializer):
         required=False,
         allow_empty=True,
     )
+    storefront_password = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
 
     def validate_url(self, value):
         value = value.strip()
         if not value.startswith(("http://", "https://")):
             value = f"https://{value}"
+        try:
+            _url_validator(value)
+        except DjangoValidationError as err:
+            raise serializers.ValidationError("Enter a valid URL.") from err
         return value
 
     def validate_email(self, value):
@@ -216,30 +314,20 @@ class StartAnalysisSerializer(serializers.Serializer):
         raw_prompts = attrs.get("prompts")
         if not raw_prompts:
             raw_prompts = []
-        cleaned = [
-            p.strip()
-            for p in raw_prompts
-            if isinstance(p, str) and p.strip()
-        ]
+        cleaned = [p.strip() for p in raw_prompts if isinstance(p, str) and p.strip()]
         if len(cleaned) > 15:
-            raise serializers.ValidationError(
-                {"prompts": "You can track at most 15 prompts."}
-            )
+            raise serializers.ValidationError({"prompts": "You can track at most 15 prompts."})
 
         if verify:
             org_id = attrs.get("org_id")
             if not org_id:
                 raise serializers.ValidationError(
-                    {
-                        "org_id": "Create your workspace first, then launch analysis from onboarding."
-                    }
+                    {"org_id": "Create your workspace first, then launch analysis from onboarding."}
                 )
             email = (attrs.get("email") or "").strip().lower()
             if not email:
                 raise serializers.ValidationError(
-                    {
-                        "email": "Sign in to continue — we need your account email to verify your workspace."
-                    }
+                    {"email": "Sign in to continue — we need your account email to verify your workspace."}
                 )
             brand = (attrs.get("brand_name") or "").strip()
             if not brand:
@@ -250,17 +338,13 @@ class StartAnalysisSerializer(serializers.Serializer):
                 )
             if len(cleaned) < 1:
                 raise serializers.ValidationError(
-                    {
-                        "prompts": "Add at least one tracking prompt before launching."
-                    }
+                    {"prompts": "Add at least one tracking prompt before launching."}
                 )
 
             org = Organization.objects.filter(pk=org_id).first()
             if not org:
                 raise serializers.ValidationError(
-                    {
-                        "org_id": "Workspace not found. Complete company setup, then try again."
-                    }
+                    {"org_id": "Workspace not found. Complete company setup, then try again."}
                 )
             if org.owner_email.strip().lower() != email:
                 raise serializers.ValidationError(
@@ -283,6 +367,7 @@ class StartAnalysisSerializer(serializers.Serializer):
 
 
 # ============ Gamification Serializers ============
+
 
 class AchievementSerializer(serializers.Serializer):
     code = serializers.CharField()
@@ -350,8 +435,14 @@ class UserActionSerializer(serializers.ModelSerializer):
             "recommendation",
         ]
         read_only_fields = [
-            "points_value", "started_at", "completed_at", "verified_at",
-            "score_before", "score_after", "score_improvement", "created_at"
+            "points_value",
+            "started_at",
+            "completed_at",
+            "verified_at",
+            "score_before",
+            "score_after",
+            "score_improvement",
+            "created_at",
         ]
 
 
@@ -366,10 +457,7 @@ class CreateUserActionSerializer(serializers.Serializer):
 
 
 class UpdateUserActionSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(
-        choices=UserAction.ActionStatus.choices,
-        required=False
-    )
+    status = serializers.ChoiceField(choices=UserAction.ActionStatus.choices, required=False)
     notes = serializers.CharField(required=False, allow_blank=True)
     score_after = serializers.FloatField(required=False)
 
@@ -383,6 +471,7 @@ class ActionTemplateSerializer(serializers.Serializer):
 
 
 # ============ Helper Serializers ============
+
 
 class ActionStatsSerializer(serializers.Serializer):
     total_actions = serializers.IntegerField()
@@ -403,8 +492,14 @@ class PromptCitationSerializer(serializers.ModelSerializer):
     class Meta:
         model = PromptCitation
         fields = [
-            "id", "url", "domain", "title", "snippet",
-            "position", "is_brand", "is_competitor",
+            "id",
+            "url",
+            "domain",
+            "title",
+            "snippet",
+            "position",
+            "is_brand",
+            "is_competitor",
         ]
 
 
@@ -419,8 +514,14 @@ class PromptResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = PromptResult
         fields = [
-            "id", "engine", "response_text", "brand_mentioned",
-            "sentiment", "confidence", "rank_position", "checked_at",
+            "id",
+            "engine",
+            "response_text",
+            "brand_mentioned",
+            "sentiment",
+            "confidence",
+            "rank_position",
+            "checked_at",
             "citations",
         ]
 
@@ -431,8 +532,14 @@ class PromptResultFullSerializer(serializers.ModelSerializer):
     class Meta:
         model = PromptResult
         fields = [
-            "id", "engine", "response_text", "brand_mentioned",
-            "sentiment", "confidence", "rank_position", "checked_at",
+            "id",
+            "engine",
+            "response_text",
+            "brand_mentioned",
+            "sentiment",
+            "confidence",
+            "rank_position",
+            "checked_at",
             "citations",
         ]
 
@@ -457,13 +564,26 @@ class PromptTrackSerializer(serializers.ModelSerializer):
     class Meta:
         model = PromptTrack
         fields = [
-            "id", "prompt_text", "is_custom", "intent", "prompt_type", "score",
-            "created_at", "results",
-            "visibility_pct", "avg_position", "sentiment_label", "ranking_label",
-            "total_runs", "mentions",
+            "id",
+            "prompt_text",
+            "is_custom",
+            "intent",
+            "prompt_type",
+            "score",
+            "created_at",
+            "results",
+            "visibility_pct",
+            "avg_position",
+            "sentiment_label",
+            "ranking_label",
+            "total_runs",
+            "mentions",
             # 5-factor scores
-            "factor_authority", "factor_content_quality", "factor_structural",
-            "factor_semantic", "factor_third_party",
+            "factor_authority",
+            "factor_content_quality",
+            "factor_structural",
+            "factor_semantic",
+            "factor_third_party",
         ]
 
     def _taxonomy(self, obj):
@@ -493,7 +613,19 @@ class PromptTrackSerializer(serializers.ModelSerializer):
     def _score_data(self, obj):
         if not hasattr(obj, "_score_cache"):
             from .pipeline.prompt_tracker import compute_prompt_score
-            results = list(obj.results.values("brand_mentioned", "sentiment", "rank_position", "confidence", "engine"))
+
+            # Read from the prefetched .results manager rather than .values()
+            # — .values() re-queries the DB even when results are prefetched.
+            results = [
+                {
+                    "brand_mentioned": r.brand_mentioned,
+                    "sentiment": r.sentiment,
+                    "rank_position": r.rank_position,
+                    "confidence": r.confidence,
+                    "engine": r.engine,
+                }
+                for r in obj.results.all()
+            ]
             obj._score_cache = compute_prompt_score(results)
         return obj._score_cache
 
@@ -626,9 +758,16 @@ class ScheduledAnalysisSerializer(serializers.ModelSerializer):
     class Meta:
         model = ScheduledAnalysis
         fields = [
-            "id", "email", "url", "brand_name", "frequency",
-            "next_run_at", "last_run_at", "last_run_slug",
-            "is_active", "created_at",
+            "id",
+            "email",
+            "url",
+            "brand_name",
+            "frequency",
+            "next_run_at",
+            "last_run_at",
+            "last_run_slug",
+            "is_active",
+            "created_at",
         ]
 
 
@@ -636,18 +775,40 @@ class SitemapAuditPageSerializer(serializers.ModelSerializer):
     class Meta:
         model = SitemapAuditPage
         fields = [
-            "id", "url", "path", "final_url", "state",
-            "status_code", "redirect_count",
-            "title", "meta_description", "h1_count",
-            "word_count", "text_ratio", "content_length",
-            "lcp_ms", "fcp_ms", "ttfb_ms", "server_ms",
-            "resource_count", "resource_bytes",
-            "link_count_total", "link_count_internal", "link_count_external",
-            "jsonld_count", "has_canonical", "has_og", "is_noindex",
-            "robots_allows_gptbot", "robots_allows_claudebot",
+            "id",
+            "url",
+            "path",
+            "final_url",
+            "state",
+            "status_code",
+            "redirect_count",
+            "title",
+            "meta_description",
+            "h1_count",
+            "word_count",
+            "text_ratio",
+            "content_length",
+            "lcp_ms",
+            "fcp_ms",
+            "ttfb_ms",
+            "server_ms",
+            "resource_count",
+            "resource_bytes",
+            "link_count_total",
+            "link_count_internal",
+            "link_count_external",
+            "jsonld_count",
+            "has_canonical",
+            "has_og",
+            "is_noindex",
+            "robots_allows_gptbot",
+            "robots_allows_claudebot",
             "robots_allows_perplexitybot",
-            "ai_score", "severity", "findings",
-            "error_message", "checked_at",
+            "ai_score",
+            "severity",
+            "findings",
+            "error_message",
+            "checked_at",
         ]
 
 
@@ -655,13 +816,25 @@ class SitemapAuditSerializer(serializers.ModelSerializer):
     class Meta:
         model = SitemapAudit
         fields = [
-            "id", "status", "progress",
-            "sitemap_url", "crawl_limit",
-            "total_urls", "indexed_count", "redirect_count",
-            "queued_count", "failed_count",
-            "avg_lcp_ms", "avg_fcp_ms", "avg_ttfb_ms", "avg_ai_score",
-            "truncated", "discovered_url_count",
-            "started_at", "finished_at", "created_at",
+            "id",
+            "status",
+            "progress",
+            "sitemap_url",
+            "crawl_limit",
+            "total_urls",
+            "indexed_count",
+            "redirect_count",
+            "queued_count",
+            "failed_count",
+            "avg_lcp_ms",
+            "avg_fcp_ms",
+            "avg_ttfb_ms",
+            "avg_ai_score",
+            "truncated",
+            "discovered_url_count",
+            "started_at",
+            "finished_at",
+            "created_at",
             "error_message",
         ]
 
@@ -676,11 +849,19 @@ class SchemaWatchPageSerializer(serializers.ModelSerializer):
     class Meta:
         model = SchemaWatchPage
         fields = [
-            "id", "url", "path", "page_kind",
+            "id",
+            "url",
+            "path",
+            "page_kind",
             "status_code",
-            "schema_types", "jsonld_count", "raw_jsonld",
-            "severity", "issues", "fix_targets",
-            "error_message", "checked_at",
+            "schema_types",
+            "jsonld_count",
+            "raw_jsonld",
+            "severity",
+            "issues",
+            "fix_targets",
+            "error_message",
+            "checked_at",
         ]
 
 
@@ -688,10 +869,17 @@ class SchemaWatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = SchemaWatch
         fields = [
-            "id", "status", "progress",
-            "total_urls", "healthy_count", "warn_count", "broken_count",
+            "id",
+            "status",
+            "progress",
+            "total_urls",
+            "healthy_count",
+            "warn_count",
+            "broken_count",
             "discovered_from_sitemap",
-            "started_at", "finished_at", "created_at",
+            "started_at",
+            "finished_at",
+            "created_at",
             "error_message",
         ]
 
@@ -700,12 +888,20 @@ class RankResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = RankResult
         fields = [
-            "id", "surface", "position",
-            "url", "domain", "title", "snippet",
-            "engine", "response_text",
+            "id",
+            "surface",
+            "position",
+            "url",
+            "domain",
+            "title",
+            "snippet",
+            "engine",
+            "response_text",
             "sentiment",
-            "is_brand_mentioned", "competitors_mentioned",
-            "upvotes", "subreddit",
+            "is_brand_mentioned",
+            "competitors_mentioned",
+            "upvotes",
+            "subreddit",
             "checked_at",
         ]
 
@@ -716,8 +912,12 @@ class RankQuerySerializer(serializers.ModelSerializer):
     class Meta:
         model = RankQuery
         fields = [
-            "id", "prompt_text", "rank",
-            "brand_mention_count", "status", "error_message",
+            "id",
+            "prompt_text",
+            "rank",
+            "brand_mention_count",
+            "status",
+            "error_message",
             "results",
         ]
 
@@ -726,9 +926,15 @@ class RankAuditSerializer(serializers.ModelSerializer):
     class Meta:
         model = RankAudit
         fields = [
-            "id", "status", "progress",
-            "total_queries", "queries_done",
-            "avg_brand_mentions", "avg_top3_brand_rate",
-            "started_at", "finished_at", "created_at",
+            "id",
+            "status",
+            "progress",
+            "total_queries",
+            "queries_done",
+            "avg_brand_mentions",
+            "avg_top3_brand_rate",
+            "started_at",
+            "finished_at",
+            "created_at",
             "error_message",
         ]

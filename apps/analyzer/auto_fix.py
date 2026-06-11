@@ -3,6 +3,7 @@ Auto-fix orchestrator — generates fix content via AI, then routes ALL writes
 through the Shopify app or WordPress plugin. The backend NEVER writes directly
 to stores.
 """
+
 import hashlib
 import hmac
 import json
@@ -46,9 +47,18 @@ def _append_shopify_llms_hint(message: str | None, run_url: str) -> str:
         return f"{base} {hint}"
     return hint
 
+
 _REFUSAL_PHRASES = [
-    "i cannot", "i can't", "not appropriate", "i notice", "i'm unable",
-    "as an ai", "i apologize", "unfortunately", "i'm sorry", "instead of",
+    "i cannot",
+    "i can't",
+    "not appropriate",
+    "i notice",
+    "i'm unable",
+    "as an ai",
+    "i apologize",
+    "unfortunately",
+    "i'm sorry",
+    "instead of",
 ]
 
 
@@ -83,7 +93,8 @@ def _sanitize_llm_output(text: str, purpose: str = "content") -> tuple[str, str 
 
     if purpose == "schema":
         import re as _re
-        json_match = _re.search(r'\{.*\}', cleaned, _re.DOTALL)
+
+        json_match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
         if json_match:
             try:
                 json.loads(json_match.group())
@@ -101,10 +112,21 @@ def _detect_fix_type(recommendation: Recommendation) -> str:
 
     # Manual-only items — cannot be auto-fixed
     manual_keywords = [
-        "sitemap", "https", "ssl", "page load speed", "page speed",
-        "crawler blocked", "403", "too slow to crawl", "timeout",
-        "wikipedia", "reddit", "google ai overview",
-        "brand into ai", "social profile", "brand website signal",
+        "sitemap",
+        "https",
+        "ssl",
+        "page load speed",
+        "page speed",
+        "crawler blocked",
+        "403",
+        "too slow to crawl",
+        "timeout",
+        "wikipedia",
+        "reddit",
+        "google ai overview",
+        "brand into ai",
+        "social profile",
+        "brand website signal",
     ]
     for kw in manual_keywords:
         if kw in title_lower or kw in desc_lower:
@@ -136,6 +158,7 @@ def _detect_fix_type(recommendation: Recommendation) -> str:
 
 # ── LLM ───────────────────────────────────────────────────────────────────
 
+
 def _call_llm(prompt: str, purpose: str = "auto-fix") -> str:
     """Call LLM via OpenRouter (fallback to Gemini direct)."""
     openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
@@ -152,7 +175,7 @@ def _call_llm(prompt: str, purpose: str = "auto-fix") -> str:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "google/gemini-2.0-flash-001",
+                    "model": os.getenv("OPENROUTER_GEMINI_MODEL", "google/gemini-2.5-flash"),
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 8192,
                 },
@@ -170,8 +193,9 @@ def _call_llm(prompt: str, purpose: str = "auto-fix") -> str:
     if google_key:
         try:
             import google.generativeai as genai
+
             genai.configure(api_key=google_key)
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             response = model.generate_content(prompt)
             text = response.text.strip()
             duration_ms = int((time.time() - t0) * 1000)
@@ -186,6 +210,7 @@ def _call_llm(prompt: str, purpose: str = "auto-fix") -> str:
 
 # ── Plugin / App Router ──────────────────────────────────────────────────
 # ALL writes go through here — the backend never touches store APIs directly.
+
 
 def _send_to_plugin(integration, run, fix_type: str, content: str) -> dict:
     """Route fix to the WordPress plugin or Shopify app. Returns result dict."""
@@ -253,7 +278,10 @@ def _send_to_wp_plugin(integration, run, fix_type: str, content: str) -> dict:
         if resp.ok:
             return resp.json()
         logger.warning("WP plugin apply-fix failed (%d): %s", resp.status_code, resp.text[:200])
-        return {"status": "failed", "message": f"WordPress plugin returned {resp.status_code}. Check plugin is active."}
+        return {
+            "status": "failed",
+            "message": f"WordPress plugin returned {resp.status_code}. Check plugin is active.",
+        }
     except requests.Timeout:
         return {"status": "failed", "message": "WordPress plugin timed out. Check your site is reachable."}
     except Exception as exc:
@@ -293,7 +321,10 @@ def _send_to_shopify_app(integration, run, fix_type: str, content: str) -> dict:
         if resp.ok:
             return resp.json()
         logger.warning("Shopify app apply-fix failed (%d): %s", resp.status_code, resp.text[:200])
-        return {"status": "failed", "message": f"Shopify app returned {resp.status_code}. Check app is installed."}
+        return {
+            "status": "failed",
+            "message": f"Shopify app returned {resp.status_code}. Check app is installed.",
+        }
     except requests.Timeout:
         return {"status": "failed", "message": "Shopify app timed out. Check your app is running."}
     except Exception as exc:
@@ -303,19 +334,21 @@ def _send_to_shopify_app(integration, run, fix_type: str, content: str) -> dict:
 
 # ── Content Reader (read-only, for LLM prompt context) ───────────────────
 
+
 def _read_page_content(integration, url: str) -> str:
     """Fetch current page content from the store via plugin/app read endpoint.
     Falls back to crawling the public URL. Returns HTML string."""
     # Try reading from the public URL as a simple fallback
     try:
-        resp = requests.get(url, timeout=15, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; SignalorBot/1.0)"
-        })
+        resp = requests.get(
+            url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (compatible; SignalorBot/1.0)"}
+        )
         if resp.ok:
             # Extract body content roughly
             html = resp.text
             import re
-            body_match = re.search(r'<body[^>]*>(.*?)</body>', html, re.DOTALL | re.IGNORECASE)
+
+            body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
             if body_match:
                 return body_match.group(1)[:12000]
             return html[:12000]
@@ -327,10 +360,12 @@ def _read_page_content(integration, url: str) -> str:
 # ── LLM Content Generators ──────────────────────────────────────────────
 # Each generator produces the fix content. The plugin/app applies it.
 
+
 def _generate_content_fix(run, recommendation) -> tuple[str, str | None]:
     """Generate enhanced content via LLM. Returns (content, error)."""
     brand_name = run.brand_name or "the website"
     from .integration_resolve import resolve_store_integration_for_run
+
     org = run.organization
     integration = resolve_store_integration_for_run(org, run.url) if org else None
     page_content = _read_page_content(integration, run.url) if integration else ""
@@ -364,6 +399,7 @@ def _generate_schema_fix(run, recommendation) -> tuple[str, str | None]:
     """Generate JSON-LD schema. Returns (schema_html, error)."""
     brand_name = run.brand_name or "the website"
     from .integration_resolve import resolve_store_integration_for_run
+
     org = run.organization
     integration = resolve_store_integration_for_run(org, run.url) if org else None
     page_content = _read_page_content(integration, run.url) if integration else ""
@@ -398,6 +434,7 @@ def _generate_meta_fix(run, recommendation) -> tuple[str, str | None]:
     """Generate SEO title + meta description. Returns (json_str, error)."""
     brand_name = run.brand_name or "the website"
     from .integration_resolve import resolve_store_integration_for_run
+
     org = run.organization
     integration = resolve_store_integration_for_run(org, run.url) if org else None
     page_content = _read_page_content(integration, run.url) if integration else ""
@@ -421,7 +458,9 @@ Title max 60 chars. Description max 160 chars. No markdown."""
     # Validate it's JSON
     try:
         meta = json.loads(cleaned)
-        return json.dumps({"seo_title": meta.get("seo_title", ""), "seo_description": meta.get("seo_description", "")}), None
+        return json.dumps(
+            {"seo_title": meta.get("seo_title", ""), "seo_description": meta.get("seo_description", "")}
+        ), None
     except (ValueError, TypeError):
         return json.dumps({"seo_title": cleaned[:60], "seo_description": ""}), None
 
@@ -478,6 +517,7 @@ Return ONLY the robots.txt content."""
 # Each entry: fix_type → function that generates content string.
 # "simple" types (ai_meta, canonical, viewport, noindex) need no LLM.
 
+
 def _generate_fix_content(fix_type: str, run, recommendation) -> tuple[str, str | None]:
     """Generate the fix content for a given type. Returns (content, error)."""
     if fix_type in ("content", "faq"):
@@ -504,12 +544,11 @@ def _generate_fix_content(fix_type: str, run, recommendation) -> tuple[str, str 
 
 # ── Orchestrator ─────────────────────────────────────────────────────────
 
+
 def _get_manual_walkthrough(recommendation: Recommendation, provider: str) -> str:
     """Return a detailed walkthrough for manual-only fixes."""
     title_lower = (recommendation.title or "").lower()
-    desc_lower = (recommendation.description or "").lower()
     is_shopify = provider == "shopify"
-    is_wp = provider == "wordpress"
 
     if "sitemap" in title_lower:
         if is_shopify:
@@ -648,8 +687,6 @@ def _get_manual_walkthrough(recommendation: Recommendation, provider: str) -> st
 
 def _build_homepage_manual_guide(fix_type: str, generated: str, gen_err: str | None, run) -> str:
     """Build a copy-paste ready manual guide with AI-generated content for Shopify homepage fixes."""
-    brand = run.brand_name or run.url or "your brand"
-
     if fix_type == "meta":
         steps = (
             "WHERE TO PASTE:\n"
@@ -673,7 +710,7 @@ def _build_homepage_manual_guide(fix_type: str, generated: str, gen_err: str | N
                 desc_line = parsed.get("seo_description", "")
             except (json.JSONDecodeError, AttributeError):
                 # Plain text — first line is title, rest is description
-                lines = [l.strip() for l in generated.strip().split("\n") if l.strip()]
+                lines = [ln.strip() for ln in generated.strip().split("\n") if ln.strip()]
                 title_line = lines[0] if lines else ""
                 desc_line = lines[1] if len(lines) > 1 else ""
 
@@ -701,7 +738,7 @@ def _build_homepage_manual_guide(fix_type: str, generated: str, gen_err: str | N
         )
         if gen_err:
             return f"{steps}\n\nCould not generate schema: {gen_err}"
-        return f"{steps}\n\nGENERATED SCHEMA (copy this into Custom Liquid if needed):\n\n<script type=\"application/ld+json\">\n{generated}\n</script>"
+        return f'{steps}\n\nGENERATED SCHEMA (copy this into Custom Liquid if needed):\n\n<script type="application/ld+json">\n{generated}\n</script>'
 
     if fix_type == "content":
         steps = (
@@ -743,10 +780,12 @@ def _is_homepage_url(url: str) -> bool:
     """Check if URL is a store homepage (no /pages/ or /products/ path)."""
     try:
         from urllib.parse import urlparse
+
         path = urlparse(url).path.rstrip("/")
         return not path or path == ""
     except Exception:
         return False
+
 
 # Fix types that cannot be applied to Shopify homepages (content lives in theme)
 _HOMEPAGE_MANUAL_FIX_TYPES = {"content", "faq", "meta", "schema"}
@@ -785,7 +824,15 @@ def apply_fixes(run, integration, recommendations: list[Recommendation]) -> list
             job.status = AutoFixJob.Status.MANUAL
             job.response_data = result
             job.save(update_fields=["status", "response_data"])
-            results.append({"recommendation_id": rec.id, "status": "manual", "message": walkthrough, "fix_type": fix_type, "generated_content": generated if not gen_err else None})
+            results.append(
+                {
+                    "recommendation_id": rec.id,
+                    "status": "manual",
+                    "message": walkthrough,
+                    "fix_type": fix_type,
+                    "generated_content": generated if not gen_err else None,
+                }
+            )
             continue
 
         # Manual fixes — skip with detailed guidance
@@ -798,7 +845,14 @@ def apply_fixes(run, integration, recommendations: list[Recommendation]) -> list
             job.status = AutoFixJob.Status.MANUAL
             job.response_data = result
             job.save(update_fields=["status", "response_data"])
-            results.append({"recommendation_id": rec.id, "status": "manual", "message": result["message"], "fix_type": fix_type})
+            results.append(
+                {
+                    "recommendation_id": rec.id,
+                    "status": "manual",
+                    "message": result["message"],
+                    "fix_type": fix_type,
+                }
+            )
             continue
 
         try:
@@ -808,7 +862,9 @@ def apply_fixes(run, integration, recommendations: list[Recommendation]) -> list
                 job.status = "failed"
                 job.error_message = err
                 job.save(update_fields=["status", "error_message"])
-                results.append({"recommendation_id": rec.id, "status": "failed", "message": err, "fix_type": fix_type})
+                results.append(
+                    {"recommendation_id": rec.id, "status": "failed", "message": err, "fix_type": fix_type}
+                )
                 continue
 
             # Step 2: Send to plugin/app to apply
@@ -816,23 +872,21 @@ def apply_fixes(run, integration, recommendations: list[Recommendation]) -> list
             result = dict(raw_result)
             norm = _normalize_plugin_status(result.get("status"))
             result["status"] = norm
-            if (
-                fix_type == "llms"
-                and integration.provider == "shopify"
-                and norm == "success"
-            ):
+            if fix_type == "llms" and integration.provider == "shopify" and norm == "success":
                 result["message"] = _append_shopify_llms_hint(result.get("message"), run.url or "")
 
             job.status = norm
             job.response_data = result
             job.save(update_fields=["status", "response_data"])
 
-            results.append({
-                "recommendation_id": rec.id,
-                "status": norm,
-                "message": result.get("message", ""),
-                "fix_type": fix_type,
-            })
+            results.append(
+                {
+                    "recommendation_id": rec.id,
+                    "status": norm,
+                    "message": result.get("message", ""),
+                    "fix_type": fix_type,
+                }
+            )
         except Exception as e:
             error_str = str(e)
             logger.exception(f"Auto-fix failed for rec {rec.id}")
@@ -845,17 +899,20 @@ def apply_fixes(run, integration, recommendations: list[Recommendation]) -> list
             job.status = "failed"
             job.error_message = msg
             job.save(update_fields=["status", "error_message"])
-            results.append({
-                "recommendation_id": rec.id,
-                "status": "failed",
-                "message": msg,
-                "fix_type": fix_type,
-            })
+            results.append(
+                {
+                    "recommendation_id": rec.id,
+                    "status": "failed",
+                    "message": msg,
+                    "fix_type": fix_type,
+                }
+            )
 
     return results
 
 
 # ── Preview + Approve (user reviews before applying) ─────────────────────
+
 
 def generate_fix_preview(run, integration, recommendation) -> dict:
     """Generate fix content via LLM and return preview WITHOUT applying."""
@@ -895,7 +952,15 @@ def generate_fix_preview(run, integration, recommendation) -> dict:
         }
 
     # LLM-generated types
-    target_type = "schema" if fix_type == "schema" else "file" if fix_type in ("llms", "robots") else "meta" if fix_type == "meta" else "content"
+    target_type = (
+        "schema"
+        if fix_type == "schema"
+        else "file"
+        if fix_type in ("llms", "robots")
+        else "meta"
+        if fix_type == "meta"
+        else "content"
+    )
 
     return {
         "status": "preview",
@@ -914,10 +979,6 @@ def apply_approved_fix(run, integration, recommendation, content: str, fix_type:
     result = dict(_send_to_plugin(integration, run, fix_type, content))
     norm = _normalize_plugin_status(result.get("status"))
     result["status"] = norm
-    if (
-        fix_type == "llms"
-        and integration.provider == "shopify"
-        and norm == "success"
-    ):
+    if fix_type == "llms" and integration.provider == "shopify" and norm == "success":
         result["message"] = _append_shopify_llms_hint(result.get("message"), run.url or "")
     return result

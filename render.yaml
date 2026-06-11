@@ -1,0 +1,291 @@
+databases:
+  - name: signalor-db
+    plan: starter
+    databaseName: signalor
+    user: signalor
+
+services:
+  - type: redis
+    name: signalor-redis
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+  - type: web
+    name: signalor-backend
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Migrations + drift reconciliation run once per deploy before traffic
+    # cuts over. Replaces the corresponding steps that used to live in
+    # build.sh (no longer used since the web service runs from the image).
+    preDeployCommand: "python scripts/reconcile_migrations.py && python manage.py migrate --no-input"
+    startCommand: opentelemetry-instrument gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 600
+    healthCheckPath: /api/auth/get-session
+    envVars:
+      # Re-enable the Playwright-backed screenshot capture in
+      # apps/analyzer/services/content_optimisation.py. We disabled it
+      # while the binary was getting wiped on the Python runtime; on
+      # this Docker image chromium is baked into the layer so the
+      # capture works reliably.
+      - key: ENABLE_SERVER_SCREENSHOTS
+        value: "1"
+      # --- OpenTelemetry → Better Stack ---
+      - key: OTEL_SERVICE_NAME
+        value: signalor-backend
+      - key: OTEL_RESOURCE_ATTRIBUTES
+        value: service.name=signalor-backend,deployment.environment=production
+      - key: OTEL_EXPORTER_OTLP_PROTOCOL
+        value: http/protobuf
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: https://s2446917.eu-fsn-3.betterstackdata.com
+      # Bearer token for the Better Stack source. Set in Render dashboard (sync: false).
+      - key: OTEL_EXPORTER_OTLP_HEADERS
+        sync: false
+      - key: OTEL_TRACES_EXPORTER
+        value: otlp
+      - key: OTEL_METRICS_EXPORTER
+        value: otlp
+      - key: OTEL_LOGS_EXPORTER
+        value: otlp
+      - key: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED
+        value: "true"
+      - key: OTEL_PYTHON_LOG_CORRELATION
+        value: "true"
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: signalor-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      # Same Redis instance is reused as Celery's broker — keeps infra simple.
+      # Without this, .delay() falls back to CELERY_TASK_ALWAYS_EAGER and the
+      # web process would run sitemap audits inline, defeating the worker.
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      - key: ALLOWED_HOSTS
+        value: api.signalor.ai,signalor-backend.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://signalor.ai,https://www.signalor.ai,https://staging.signalor.ai,http://localhost:3000
+      - key: FRONTEND_BASE_URL
+        value: https://signalor.ai
+      - key: ADMIN_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: SUBSCRIPTION_REQUIRED
+        value: "true"
+      - key: ENFORCE_PLAN_LIMITS
+        value: "true"
+      - key: REQUIRE_SUBSCRIPTION_FOR_INTEGRATIONS
+        value: "true"
+      - key: DODO_API_KEY
+        sync: false
+      - key: DODO_LIVE_MODE
+        value: "true"
+      - key: DODO_PRODUCT_ID_STARTER
+        sync: false
+      - key: DODO_PRODUCT_ID_PRO
+        sync: false
+      - key: DODO_PRODUCT_ID_BUSINESS
+        sync: false
+      - key: DODO_WEBHOOK_SECRET
+        sync: false
+      - key: DODO_REFEREE_DISCOUNT_ID
+        sync: false
+      - key: DODO_REFERRER_DISCOUNT_ID
+        sync: false
+      - key: DODO_REFEREE_DISCOUNT_CODE
+        sync: false
+      - key: DODO_REFERRER_DISCOUNT_CODE
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PRICE_ID_USD
+        sync: false
+      - key: STRIPE_PRICE_ID_INR
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
+      - key: SHOPIFY_CLIENT_SECRET
+        sync: false
+      - key: SHOPIFY_REDIRECT_URI
+        value: https://api.signalor.ai/api/integrations/shopify/callback
+      - key: SHOPIFY_APP_WEBHOOK_SECRET
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      - key: INTERNAL_EMAILS
+        sync: false
+      # Backblaze B2 cache for Dodo invoice PDFs. When all four are set, the
+      # invoice endpoint serves from B2 on cache hit and uploads on first
+      # successful Dodo fetch. Absent → invoice flow works as before, no
+      # cache. ``B2_REGION`` is optional and defaults to ``us-west-002``.
+      - key: B2_KEY_ID
+        sync: false
+      - key: B2_APPLICATION_KEY
+        sync: false
+      - key: B2_BUCKET
+        sync: false
+      - key: B2_ENDPOINT
+        sync: false
+      - key: B2_REGION
+        sync: false
+
+  - type: worker
+    name: signalor-celery-worker
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: ./build.sh
+    # Single worker process, modest concurrency — sitemap audits are mostly
+    # network-bound. Bump --concurrency when more tasks land on Celery.
+    startCommand: celery -A config worker --loglevel=info --concurrency=2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      # Worker stays on the Python runtime — sitemap audits use plain
+      # requests, no Playwright needed here. If that ever changes, switch
+      # this service to runtime: docker too (using ./Dockerfile).
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: signalor-backend
+          envVarKey: SECRET_KEY
+      - key: DATABASE_URL
+        fromDatabase:
+          name: signalor-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      # Celery picks up REDIS_URL via settings.base if CELERY_BROKER_URL is
+      # unset; setting it explicitly here documents the intent.
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      - key: ALLOWED_HOSTS
+        value: api.signalor.ai
+      - key: FRONTEND_BASE_URL
+        value: https://signalor.ai
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+
+  - type: cron
+    name: signalor-scheduled-analyses
+    runtime: python
+    plan: starter
+    region: oregon
+    schedule: "*/30 * * * *"
+    buildCommand: ./build.sh
+    startCommand: python manage.py run_scheduled_analyses
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: signalor-backend
+          envVarKey: SECRET_KEY
+      - key: DATABASE_URL
+        fromDatabase:
+          name: signalor-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: signalor-redis
+          property: connectionString
+      - key: ALLOWED_HOSTS
+        value: api.signalor.ai
+      - key: FRONTEND_BASE_URL
+        value: https://signalor.ai
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+
+  - type: cron
+    name: signalor-cleanup-stale-rewards
+    runtime: python
+    plan: starter
+    region: oregon
+    schedule: "0 4 * * *"
+    buildCommand: ./build.sh
+    startCommand: python manage.py cleanup_stale_rewards
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: signalor-db
+          property: connectionString
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: signalor-backend
+          envVarKey: SECRET_KEY
+      - key: ALLOWED_HOSTS
+        value: api.signalor.ai
