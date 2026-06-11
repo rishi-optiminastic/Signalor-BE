@@ -1,0 +1,21 @@
+# Caddy reverse proxy for the Signalor backend.
+#
+# Caddy obtains and renews a Let's Encrypt cert automatically for this domain,
+# as long as the domain's A record points at this server and ports 80/443 are
+# open. It terminates TLS and proxies plain HTTP to gunicorn on web:8000.
+#
+# Replace api.signalor.ai with whatever hostname you point at this VPS.
+# (Django's ALLOWED_HOSTS in stack.env must include the same hostname.)
+
+api2.signalor.ai {
+	encode zstd gzip
+
+	# reverse_proxy forwards the original Host and sets X-Forwarded-Proto=https,
+	# which Django's SECURE_PROXY_SSL_HEADER / USE_X_FORWARDED_HOST rely on.
+	reverse_proxy web:8000 {
+		# Render's health check path — handy for `caddy` to know upstream is up.
+		health_uri /api/auth/get-session
+		health_interval 30s
+		health_timeout 5s
+	}
+}

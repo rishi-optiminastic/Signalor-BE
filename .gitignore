@@ -43,3 +43,6 @@ env/*.env
 htmlcov/
 
 .env*
+
+# Hetzner deploy — live secrets (template is committed as deploy/stack.env.example)
+deploy/stack.env
