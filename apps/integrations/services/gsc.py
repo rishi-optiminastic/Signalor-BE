@@ -317,6 +317,126 @@ def inspect_gsc_url(integration: Integration, page_url: str) -> dict:
     }
 
 
+_SITEMAPS_URL = "https://www.googleapis.com/webmasters/v3/sites/{site}/sitemaps"
+
+
+def list_gsc_sitemaps(integration: Integration) -> dict:
+    """
+    List the sitemaps Google knows about for the selected property, with the
+    submitted/indexed counts, errors, and warnings straight from Search Console.
+
+    Returns {"sitemaps": [...], "submitted": int, "indexed": int}.
+    """
+    site_url = integration.metadata.get("site_url")
+    if not site_url:
+        raise ValueError("No Search Console property selected for this integration.")
+
+    token = _bearer(integration)
+    url = _SITEMAPS_URL.format(site=quote(site_url, safe=""))
+    resp = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        logger.error("GSC list sitemaps failed: %s %s", resp.status_code, resp.text)
+        raise ValueError(f"Failed to list sitemaps (HTTP {resp.status_code}).")
+
+    entries = resp.json().get("sitemap", []) or []
+    sitemaps = []
+    total_submitted = 0
+    total_indexed = 0
+    for entry in entries:
+        submitted = 0
+        indexed = 0
+        for content in entry.get("contents", []) or []:
+            submitted += int(content.get("submitted", 0) or 0)
+            indexed += int(content.get("indexed", 0) or 0)
+        total_submitted += submitted
+        total_indexed += indexed
+        sitemaps.append(
+            {
+                "path": entry.get("path", ""),
+                "type": entry.get("type", ""),
+                "is_index": bool(entry.get("isSitemapsIndex", False)),
+                "is_pending": bool(entry.get("isPending", False)),
+                "last_submitted": entry.get("lastSubmitted", ""),
+                "last_downloaded": entry.get("lastDownloaded", ""),
+                "warnings": int(entry.get("warnings", 0) or 0),
+                "errors": int(entry.get("errors", 0) or 0),
+                "submitted": submitted,
+                "indexed": indexed,
+            }
+        )
+
+    return {
+        "sitemaps": sitemaps,
+        "submitted": total_submitted,
+        "indexed": total_indexed,
+    }
+
+
+def fetch_gsc_coverage(integration: Integration, days: int = 90) -> dict:
+    """
+    Build a live index-coverage view from Search Console.
+
+    Google exposes no full "coverage report" API, so we combine two real signals:
+    - sitemap submitted/indexed totals (from the Sitemaps API), and
+    - the pages Google actually served in Search over the window (Search Analytics
+      ``page`` dimension) — every such page is crawled and indexed.
+
+    Returns {"submitted", "indexed", "served_count", "pages": [...], date range}.
+    """
+    site_url = integration.metadata.get("site_url")
+    if not site_url:
+        raise ValueError("No Search Console property selected for this integration.")
+
+    token = _bearer(integration)
+    end_date = date.today() - timedelta(days=3)
+    start_date = end_date - timedelta(days=days)
+
+    pages = [
+        {
+            "url": row["keys"][0],
+            "clicks": int(row.get("clicks", 0)),
+            "impressions": int(row.get("impressions", 0)),
+            "ctr": round(float(row.get("ctr", 0.0)), 4),
+            "position": round(float(row.get("position", 0.0)), 1),
+        }
+        for row in _query(
+            token,
+            site_url,
+            {
+                "startDate": start_date.isoformat(),
+                "endDate": end_date.isoformat(),
+                "dimensions": ["page"],
+                "rowLimit": 1000,
+            },
+        )
+    ]
+    pages.sort(key=lambda p: p["impressions"], reverse=True)
+
+    # Sitemap submitted/indexed totals are a best-effort enrichment — never fail
+    # coverage just because the property has no submitted sitemap.
+    submitted = 0
+    indexed = 0
+    try:
+        sm = list_gsc_sitemaps(integration)
+        submitted = sm["submitted"]
+        indexed = sm["indexed"]
+    except ValueError:
+        pass
+
+    return {
+        "date_start": start_date.isoformat(),
+        "date_end": end_date.isoformat(),
+        "submitted": submitted,
+        "indexed": indexed,
+        "served_count": len(pages),
+        "pages": pages,
+    }
+
+
 def normalize_site_host(site_url: str) -> str:
     """Best-effort hostname for a GSC property (handles sc-domain: and URL prefixes)."""
     if site_url.startswith("sc-domain:"):

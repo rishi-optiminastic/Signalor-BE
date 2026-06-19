@@ -1142,6 +1142,82 @@ class GSCUrlInspectView(APIView):
             )
 
 
+def _active_gsc_integration_or_response(email: str):
+    """Resolve the live GSC integration for ``email`` -> (integration, error_response)."""
+    if not email:
+        return None, Response(
+            {"error": "An 'email' parameter is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    org, err = _get_org_or_400(email)
+    if err:
+        return None, err
+    try:
+        integration = Integration.objects.get(
+            organization=org,
+            provider=Integration.Provider.GOOGLE_SEARCH_CONSOLE,
+            is_active=True,
+        )
+    except Integration.DoesNotExist:
+        return None, Response(
+            {"error": "Search Console not connected."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return integration, None
+
+
+class GSCSitemapsView(APIView):
+    """GET /api/integrations/google-search-console/sitemaps/?email= — live sitemap list."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [PollingThrottle]
+
+    def get(self, request):
+        email = request.query_params.get("email", "").lower().strip()
+        integration, err = _active_gsc_integration_or_response(email)
+        if err:
+            return err
+
+        try:
+            from .services.gsc import list_gsc_sitemaps
+
+            return Response(list_gsc_sitemaps(integration))
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.error("GSC sitemaps error: %s", exc)
+            return Response(
+                {"error": "Failed to load sitemaps."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class GSCCoverageView(APIView):
+    """GET /api/integrations/google-search-console/coverage/?email= — live index coverage."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [PollingThrottle]
+
+    def get(self, request):
+        email = request.query_params.get("email", "").lower().strip()
+        integration, err = _active_gsc_integration_or_response(email)
+        if err:
+            return err
+
+        try:
+            from .services.gsc import fetch_gsc_coverage
+
+            return Response(fetch_gsc_coverage(integration))
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            logger.error("GSC coverage error: %s", exc)
+            return Response(
+                {"error": "Failed to load index coverage."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
 # ---------- Shopify endpoints ----------
 
 
