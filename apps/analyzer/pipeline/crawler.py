@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from . import spider_cloud
 from .utils import extract_internal_links, extract_text
 
 logger = logging.getLogger("apps")
@@ -431,6 +432,135 @@ def _discover_from_page(url: str, http: requests.Session) -> list[str]:
 
 
 def crawl_site(
+    base_url: str,
+    storefront_password: str = "",
+    max_pages: int = 15,
+) -> tuple[CrawlResult, SiteMap, list[CrawlResult]]:
+    """Crawl a full site: homepage + discovered pages.
+
+    Routes through the hosted spider.cloud crawler when ``SPIDER_API_KEY`` is
+    configured, falling back to the built-in direct crawler on any failure (or
+    for password-protected stores, which need our authenticated session).
+    Returns the same ``(homepage, SiteMap, additional)`` contract regardless of
+    which path runs.
+    """
+    if spider_cloud.is_configured() and not storefront_password:
+        try:
+            spidered = _crawl_site_via_spider(base_url, max_pages)
+        except spider_cloud.SpiderError as exc:
+            logger.warning("spider.cloud crawl failed for %s, using direct crawler: %s", base_url, exc)
+            spidered = None
+        if spidered is not None:
+            homepage_result, site_map, additional = spidered
+            if homepage_result.ok:
+                logger.info(
+                    "Site crawl via spider.cloud: homepage + %d additional pages", len(additional)
+                )
+                return homepage_result, site_map, additional
+            logger.info(
+                "spider.cloud homepage not scoreable for %s, using direct crawler", base_url
+            )
+
+    return _crawl_site_direct(base_url, storefront_password, max_pages)
+
+
+def _crawl_site_via_spider(
+    base_url: str, max_pages: int
+) -> tuple[CrawlResult, SiteMap, list[CrawlResult]] | None:
+    """Crawl via spider.cloud and adapt the response into our crawl contract.
+
+    Returns ``None`` (signalling a fallback) when the API yields nothing usable.
+    """
+    # +1 so the page budget covers the homepage plus ``max_pages`` extras.
+    pages = spider_cloud.crawl(base_url, limit=max_pages + 1, return_format="raw")
+    if not pages:
+        return None
+
+    # A shared session lets the technical scorer fetch robots.txt / sitemap.xml
+    # downstream (spider.cloud doesn't return those).
+    session = requests.Session()
+
+    def _to_result(page: dict) -> CrawlResult | None:
+        page_url = (page.get("url") or "").strip()
+        if not page_url:
+            return None
+        result = CrawlResult(url=page_url)
+        result.session = session
+        result.is_https = urlparse(page_url).scheme == "https"
+        try:
+            result.status_code = int(page.get("status") or 0)
+        except (TypeError, ValueError):
+            result.status_code = 0
+        content = page.get("content")
+        if isinstance(content, bytes):
+            content = content.decode("utf-8", "replace")
+        html = content or ""
+        if result.status_code == 200 and html:
+            _populate_from_html(result, html, page_url)
+        elif page.get("error"):
+            result.error = str(page.get("error"))
+        return result
+
+    results = [r for r in (_to_result(p) for p in pages) if r is not None]
+    if not results:
+        return None
+
+    def _norm(u: str) -> str:
+        return u.rstrip("/")
+
+    homepage_result = next((r for r in results if _norm(r.url) == _norm(base_url)), None)
+    if homepage_result is None:
+        homepage_result = next((r for r in results if r.ok), results[0])
+
+    additional = [r for r in results if r is not homepage_result][:max_pages]
+    site_map = _categorize_into_sitemap(base_url, [r.url for r in results])
+    return homepage_result, site_map, additional
+
+
+def _categorize_into_sitemap(
+    base_url: str,
+    discovered_urls: list[str],
+    max_products: int = 5,
+    max_collections: int = 3,
+    max_pages: int = 5,
+    max_blog: int = 3,
+) -> SiteMap:
+    """Bucket discovered URLs into a ``SiteMap`` by URL pattern (mirrors the
+    categorization used by ``discover_site_pages``)."""
+    site_map = SiteMap(homepage=base_url)
+    for url in discovered_urls:
+        path = urlparse(url).path.lower().strip("/")
+        if not path:
+            continue
+        if "/products/" in path or path.startswith("products/"):
+            site_map.products.append(url)
+        elif "/collections/" in path or path.startswith("collections/"):
+            site_map.collections.append(url)
+        elif "/blogs/" in path or "/blog/" in path or path.startswith("blog/"):
+            site_map.blog_posts.append(url)
+        elif "/pages/" in path or path.startswith("pages/"):
+            site_map.pages.append(url)
+        elif any(
+            kw in path
+            for kw in ["about", "contact", "shipping", "faq", "privacy", "terms", "policy", "team", "story"]
+        ):
+            site_map.pages.append(url)
+        elif any(kw in path for kw in ["category", "categories", "shop", "store"]):
+            site_map.collections.append(url)
+        elif path.count("/") == 0:
+            site_map.pages.append(url)
+        else:
+            site_map.other.append(url)
+
+    site_map.products = site_map.products[:max_products]
+    site_map.collections = site_map.collections[:max_collections]
+    site_map.pages = site_map.pages[:max_pages]
+    site_map.blog_posts = site_map.blog_posts[:max_blog]
+    site_map.other = site_map.other[:3]
+    return site_map
+
+
+def _crawl_site_direct(
     base_url: str,
     storefront_password: str = "",
     max_pages: int = 15,
