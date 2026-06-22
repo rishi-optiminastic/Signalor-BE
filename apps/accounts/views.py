@@ -17,7 +17,7 @@ from rest_framework.views import APIView
 
 from apps.partners.services import get_active_attribution
 from apps.referrals.models import Referral
-from core.throttling import PollingThrottle
+from core.throttling import ExpensiveThrottle, PollingThrottle
 
 from .billing_emails import send_billing_emails
 from .dodo_env import (
@@ -86,6 +86,7 @@ class CreateCheckoutSessionView(APIView):
     """POST /api/payments/create-checkout/"""
 
     permission_classes = [AllowAny]
+    throttle_classes = [ExpensiveThrottle]  # mints a Dodo checkout session (external cost)
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
@@ -1408,6 +1409,7 @@ class ProfilePhotoView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [ExpensiveThrottle]  # multipart upload to Backblaze B2
 
     def post(self, request):
         from .models import User

@@ -5295,6 +5295,7 @@ class WeeklyTestEmailView(APIView):
     Sends a weekly analytics email to the given address using live run data."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [ExpensiveThrottle]  # sends a live email — bound abuse
 
     def post(self, request, slug):
         import datetime
@@ -5778,6 +5779,7 @@ class BlogComposerUploadImageView(APIView):
     """POST runs/s/<slug>/blog/upload-image/ — upload an image to WP media."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [ExpensiveThrottle]  # multipart upload to WP media
 
     def post(self, request, slug):
         _, email = _blog_run_email(slug)
