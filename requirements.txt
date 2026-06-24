@@ -90,3 +90,6 @@ apscheduler>=3.10,<4
 # threading.Thread; migrate piecemeal as new tasks land.
 celery[redis]>=5.4,<6
 sentry-sdk>=2.0,<3
+
+# Crawlee — in-process HTTP crawler for the analyzer site crawl (crawl_site)
+crawlee>=1.7,<2
