@@ -166,6 +166,14 @@ class Recommendation(models.Model):
     # The finding key that triggered this recommendation (e.g. "no_h1", "no_citations")
     finding_key = models.CharField(max_length=80, blank=True, default="")
 
+    # ── Daily re-check / re-prioritize state ──────────────────────────────────
+    # Last time the daily job re-verified this fix against the live site.
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    # Re-ranked order among still-open recs for this run (1 = highest). 0 = unranked.
+    daily_priority_rank = models.IntegerField(default=0)
+    # The single "priority fix of the day" surfaced at the top of Tasks.
+    is_top_fix = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["priority", "pillar"]
 
