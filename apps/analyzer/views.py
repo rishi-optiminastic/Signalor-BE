@@ -412,14 +412,61 @@ def _parse_publish_time(raw: str | None):
 
 
 def _to_html_from_markdownish(text: str) -> str:
-    chunks = [chunk.strip() for chunk in (text or "").split("\n\n") if chunk.strip()]
-    if not chunks:
+    """Convert lightweight markdown (headings, bullet lists, bold, links) to HTML.
+
+    Markdown links ``[text](url)`` become anchors — that's how the brand backlink
+    is rendered on the satellite sites.
+    """
+    import html as _html
+    import re as _re
+
+    raw = (text or "").strip()
+    if not raw:
         return "<p></p>"
-    html_chunks = []
-    for chunk in chunks:
-        chunk_html = chunk.replace("\n", "<br/>")
-        html_chunks.append(f"<p>{chunk_html}</p>")
-    return "".join(html_chunks)
+
+    def inline(s: str) -> str:
+        s = _html.escape(s, quote=False)
+        s = _re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', s)
+        s = _re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+        return s
+
+    out: list[str] = []
+    list_buf: list[str] = []
+    para_buf: list[str] = []
+
+    def flush_list():
+        if list_buf:
+            out.append("<ul>" + "".join(f"<li>{inline(x)}</li>" for x in list_buf) + "</ul>")
+            list_buf.clear()
+
+    def flush_para():
+        if para_buf:
+            out.append(f"<p>{inline(' '.join(para_buf))}</p>")
+            para_buf.clear()
+
+    for line in raw.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            flush_para()
+            flush_list()
+            continue
+        heading = _re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if heading:
+            flush_para()
+            flush_list()
+            level = min(len(heading.group(1)), 6)
+            out.append(f"<h{level}>{inline(heading.group(2))}</h{level}>")
+            continue
+        if _re.match(r"^[-*]\s+", stripped):
+            flush_para()
+            list_buf.append(_re.sub(r"^[-*]\s+", "", stripped))
+            continue
+        flush_list()
+        para_buf.append(stripped)
+
+    flush_para()
+    flush_list()
+    return "".join(out) or "<p></p>"
 
 
 def _get_or_create_blog_config(
@@ -5599,6 +5646,43 @@ def _brand_ref_for_run(run) -> str:
     if run.organization_id:
         return f"org:{run.organization_id}"
     return f"run:{run.slug}"
+
+
+class BlogGenerateView(APIView):
+    """POST /runs/s/<slug>/blog/generate/ — AI-generate a blog draft for a run
+    (used by the Our-backlinks tab). Wraps _generate_blog_draft and returns HTML."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        from django.shortcuts import get_object_or_404
+
+        run = get_object_or_404(AnalysisRun, slug=slug)
+        data = request.data or {}
+        topic = (data.get("topic") or "").strip()
+        site_url = (run.organization.url if run.organization else "") or run.url or ""
+        if not topic:
+            brand = getattr(run, "brand_name", "") or urlparse(site_url).netloc
+            topic = f"{brand} AI search strategy"
+        keywords = data.get("keywords") if isinstance(data.get("keywords"), list) else []
+        try:
+            recommendations = list(run.recommendations.values_list("title", flat=True)[:8])
+        except Exception:
+            recommendations = []
+
+        draft = _generate_blog_draft(site_url, topic, keywords, recommendations)
+        content_html = _to_html_from_markdownish(draft.get("content_markdown") or "")
+        return Response(
+            {
+                "title": draft.get("title", ""),
+                "slug": draft.get("slug", ""),
+                "meta_description": draft.get("meta_description", ""),
+                "excerpt": draft.get("excerpt", ""),
+                "tags": draft.get("tags", []),
+                "content_html": content_html,
+                "content_markdown": draft.get("content_markdown", ""),
+            }
+        )
 
 
 class BlogPublishNetworkView(APIView):

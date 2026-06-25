@@ -4,6 +4,7 @@ from .views import (
     AchievementsView,
     ActionStatsView,
     ActionTemplatesView,
+    BlogGenerateView,
     BlogPublishNetworkView,
     OurBacklinksView,
     # Sitemap audit
@@ -182,6 +183,11 @@ urlpatterns = [
     # Backlink marketplace
     path("runs/s/<str:slug>/backlinks/free/", RunBacklinkFreeView.as_view(), name="backlink-free"),
     path("runs/s/<str:slug>/backlinks/our/", OurBacklinksView.as_view(), name="backlink-our"),
+    path(
+        "runs/s/<str:slug>/blog/generate/",
+        BlogGenerateView.as_view(),
+        name="blog-generate",
+    ),
     path(
         "runs/s/<str:slug>/blog/publish-network/",
         BlogPublishNetworkView.as_view(),
