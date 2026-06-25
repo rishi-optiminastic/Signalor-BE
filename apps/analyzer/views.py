@@ -5655,7 +5655,7 @@ class BlogPublishNetworkView(APIView):
             published_at=timezone.now(),
         )
         domain = (dj_settings.SATELLITE_SITES.get(site) or "").rstrip("/")
-        public_url = f"{domain}/blog/{post.slug}" if domain else ""
+        public_url = f"{domain}/{post.slug}" if domain else ""
         return Response(
             {
                 "id": post.id,
@@ -5697,7 +5697,7 @@ class OurBacklinksView(APIView):
                         "site": p.site,
                         "category": p.site,
                         "title": p.title,
-                        "url": f"{domain}/blog/{p.slug}" if domain else "",
+                        "url": f"{domain}/{p.slug}" if domain else "",
                         "brand_url": p.brand_url,
                         "status": p.status,
                         "published_at": p.published_at,
