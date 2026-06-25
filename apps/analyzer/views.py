@@ -343,6 +343,9 @@ Requirements:
 - meta_description: max 160 chars
 - excerpt: 2-3 sentences
 - content_markdown: 1200-1800 words, clear H2/H3 headings, actionable sections
+- content_markdown MUST include 1-2 natural, contextual links back to the brand
+  site ({site_url}) using markdown link syntax [anchor]({site_url}), placed where
+  they read naturally — these are the backlinks.
 - tags: array of 4-8 short tags
 - Mention practical steps readers can apply.
 """
@@ -5591,11 +5594,17 @@ class ContentRawFileUpsertView(APIView):
 # ── Satellite blog network ("Our Backlinks") ─────────────────────────────────
 
 
+def _brand_ref_for_run(run) -> str:
+    """Stable string key for the run's brand (no cross-DB FK to the blog DB)."""
+    if run.organization_id:
+        return f"org:{run.organization_id}"
+    return f"run:{run.slug}"
+
+
 class BlogPublishNetworkView(APIView):
-    """POST /runs/s/<slug>/blog/publish-network/ — publish a generated blog to a
-    satellite site (research/listicals/market_trends). Stores a published
-    SatelliteBlogPost (the satellite site pulls it via the public site API) and
-    returns the live URL, which is the backlink shown in "Our Backlinks"."""
+    """POST /runs/s/<slug>/blog/publish-network/ — publish a generated blog to one
+    satellite site. Writes a published BlogPost into the shared blog DB (the site
+    reads it) and returns the live URL, which is the backlink shown in "Our backlinks"."""
 
     permission_classes = [AllowAny]
 
@@ -5604,46 +5613,45 @@ class BlogPublishNetworkView(APIView):
         from django.shortcuts import get_object_or_404
         from django.utils import timezone
 
-        from .models import SatelliteBlogPost
+        from .models import BlogPost
 
         run = get_object_or_404(AnalysisRun, slug=slug)
         data = request.data or {}
         site = (data.get("site") or "").strip()
-        if site not in dict(SatelliteBlogPost.Site.choices):
+        if site not in dict(BlogPost.Site.choices):
             return Response(
-                {"error": "site must be one of: research, listicals, market_trends."},
+                {"error": "site must be one of: research, listicals, market_trends, comparison, step_guide."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         title = (data.get("title") or "").strip()
         if not title:
             return Response({"error": "title is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        base_slug = _slugify(data.get("slug") or title)
-        slug_val = base_slug
-        n = 2
-        while SatelliteBlogPost.objects.filter(site=site, slug=slug_val).exists():
-            slug_val = f"{base_slug}-{n}"
-            n += 1
-
-        content_markdown = data.get("content_markdown") or ""
         content_html = data.get("content_html") or ""
+        content_markdown = data.get("content_markdown") or ""
         if not content_html and content_markdown:
             content_html = _to_html_from_markdownish(content_markdown)
 
+        base_slug = _slugify(data.get("slug") or title)
+        slug_val = base_slug
+        n = 2
+        while BlogPost.objects.filter(site=site, slug=slug_val).exists():
+            slug_val = f"{base_slug}-{n}"
+            n += 1
+
         brand_url = (run.organization.url if run.organization else "") or run.url or ""
 
-        post = SatelliteBlogPost.objects.create(
-            organization=run.organization,
-            analysis_run=run,
+        post = BlogPost.objects.create(
             site=site,
             slug=slug_val,
             title=title[:300],
-            meta_description=(data.get("meta_description") or "")[:320],
-            excerpt=(data.get("excerpt") or "")[:1000],
+            description=(data.get("description") or data.get("meta_description") or "")[:2000],
             content_html=content_html,
-            content_markdown=content_markdown,
+            image_url=(data.get("image_url") or "")[:2048],
+            category=(data.get("category") or "")[:80],
             brand_url=brand_url,
-            status=SatelliteBlogPost.Status.PUBLISHED,
+            brand_ref=_brand_ref_for_run(run),
+            status=BlogPost.Status.PUBLISHED,
             published_at=timezone.now(),
         )
         domain = (dj_settings.SATELLITE_SITES.get(site) or "").rstrip("/")
@@ -5665,7 +5673,7 @@ class BlogPublishNetworkView(APIView):
 
 class OurBacklinksView(APIView):
     """GET /runs/s/<slug>/backlinks/our/ — backlinks created for this brand by
-    publishing blogs to the satellite network."""
+    publishing blogs to the satellite network (read from the shared blog DB)."""
 
     permission_classes = [AllowAny]
 
@@ -5673,26 +5681,28 @@ class OurBacklinksView(APIView):
         from django.conf import settings as dj_settings
         from django.shortcuts import get_object_or_404
 
-        from .models import SatelliteBlogPost
+        from .models import BlogPost
 
         run = get_object_or_404(AnalysisRun, slug=slug)
-        if run.organization_id:
-            qs = SatelliteBlogPost.objects.filter(organization_id=run.organization_id)
-        else:
-            qs = SatelliteBlogPost.objects.filter(analysis_run=run)
         rows = []
-        for p in qs.order_by("-published_at", "-created_at"):
-            domain = (dj_settings.SATELLITE_SITES.get(p.site) or "").rstrip("/")
-            rows.append(
-                {
-                    "id": p.id,
-                    "site": p.site,
-                    "category": p.site,
-                    "title": p.title,
-                    "url": f"{domain}/blog/{p.slug}" if domain else "",
-                    "brand_url": p.brand_url,
-                    "status": p.status,
-                    "published_at": p.published_at,
-                }
+        try:
+            qs = BlogPost.objects.filter(brand_ref=_brand_ref_for_run(run)).order_by(
+                "-published_at", "-created_at"
             )
+            for p in qs:
+                domain = (dj_settings.SATELLITE_SITES.get(p.site) or "").rstrip("/")
+                rows.append(
+                    {
+                        "id": p.id,
+                        "site": p.site,
+                        "category": p.site,
+                        "title": p.title,
+                        "url": f"{domain}/blog/{p.slug}" if domain else "",
+                        "brand_url": p.brand_url,
+                        "status": p.status,
+                        "published_at": p.published_at,
+                    }
+                )
+        except Exception as exc:  # blog DB not configured / unreachable → empty list
+            logger.warning("our-backlinks: blog DB read failed for %s: %s", slug, exc)
         return Response({"rows": rows})

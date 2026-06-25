@@ -1718,48 +1718,39 @@ class ContentSuggestion(models.Model):
         return f"ContentSuggestion<{self.target_field} {self.url}>"
 
 
-class SatelliteBlogPost(models.Model):
-    """An AI-generated blog post published to one of our satellite blog sites.
+class BlogPost(models.Model):
+    """A blog post published to a satellite site — stored in the SHARED blog DB.
 
-    The satellite Next.js sites have no DB of their own — they pull these rows
-    via the public site API. Each published post links back to ``brand_url``
-    (that's the backlink); its live URL is shown in the dashboard's
-    "Our Backlinks" tab. One satellite site == one category.
+    No FKs (it lives in a separate DB the satellite sites read standalone). ``site``
+    separates the 5 sites; ``brand_ref`` + ``brand_url`` let Signalor's "Our
+    backlinks" tab filter to a brand. Signalor writes these rows; sites read them.
+    Routed to the ``blog`` database via config.db_router.BlogRouter.
     """
 
     class Site(models.TextChoices):
         RESEARCH = "research", "Research"
         LISTICALS = "listicals", "Listicals"
         MARKET_TRENDS = "market_trends", "Market Trends"
+        COMPARISON = "comparison", "Comparison"
+        STEP_GUIDE = "step_guide", "Step Guide"
 
     class Status(models.TextChoices):
         DRAFT = "draft", "Draft"
         PUBLISHED = "published", "Published"
 
-    organization = models.ForeignKey(
-        "organizations.Organization",
-        on_delete=models.CASCADE,
-        related_name="satellite_blog_posts",
-        null=True,
-        blank=True,
-    )
-    analysis_run = models.ForeignKey(
-        AnalysisRun,
-        on_delete=models.SET_NULL,
-        related_name="satellite_blog_posts",
-        null=True,
-        blank=True,
-    )
     site = models.CharField(max_length=20, choices=Site.choices, db_index=True)
     slug = models.CharField(max_length=160, db_index=True)
     title = models.CharField(max_length=300)
-    meta_description = models.CharField(max_length=320, blank=True, default="")
-    excerpt = models.TextField(blank=True, default="")
+    description = models.TextField(blank=True, default="")
     content_html = models.TextField(blank=True, default="")
-    content_markdown = models.TextField(blank=True, default="")
-    # Brand domain the post links back to (the backlink target).
+    image_url = models.URLField(max_length=2048, blank=True, default="")
+    category = models.CharField(max_length=80, blank=True, default="")
+    # The brand domain the post links back to (the backlink target).
     brand_url = models.URLField(max_length=2048, blank=True, default="")
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    # String ref to the Signalor org/brand (no cross-DB FK) for dashboard filtering.
+    brand_ref = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    source = models.CharField(max_length=20, default="signalor")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PUBLISHED)
     published_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1767,12 +1758,12 @@ class SatelliteBlogPost(models.Model):
     class Meta:
         ordering = ["-published_at", "-created_at"]
         constraints = [
-            models.UniqueConstraint(fields=["site", "slug"], name="uniq_satellite_site_slug"),
+            models.UniqueConstraint(fields=["site", "slug"], name="uniq_blogpost_site_slug"),
         ]
         indexes = [
             models.Index(fields=["site", "status"]),
-            models.Index(fields=["organization", "status"]),
+            models.Index(fields=["brand_ref"]),
         ]
 
     def __str__(self):
-        return f"SatelliteBlogPost<{self.site}/{self.slug}>"
+        return f"BlogPost<{self.site}/{self.slug}>"

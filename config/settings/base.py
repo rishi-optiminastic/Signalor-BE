@@ -342,17 +342,21 @@ CORS_ALLOWED_ORIGINS = [
 # "Cannot reach the server." Extend the defaults rather than replace them.
 CORS_ALLOW_HEADERS = (*default_cors_headers, "x-onboarding-token")
 
-# ── Satellite blog network ────────────────────────────────────────────────────
-# Domains of our external Next.js blog sites (category == site). Used to build
-# the public backlink URL (``<domain>/blog/<slug>``) shown in "Our Backlinks".
-# Override per env, e.g. SATELLITE_SITE_RESEARCH_URL=https://research.example.com
+# ── Satellite blog network (shared Neon DB) ───────────────────────────────────
+# Domains of our 5 external Next.js blog sites (category == site). Used to build
+# the live backlink URL (``<domain>/blog/<slug>``) shown in "Our backlinks".
 SATELLITE_SITES = {
     "research": os.getenv("SATELLITE_SITE_RESEARCH_URL", "http://localhost:3002").rstrip("/"),
     "listicals": os.getenv("SATELLITE_SITE_LISTICALS_URL", "http://localhost:3003").rstrip("/"),
     "market_trends": os.getenv("SATELLITE_SITE_MARKET_TRENDS_URL", "http://localhost:3004").rstrip("/"),
+    "comparison": os.getenv("SATELLITE_SITE_COMPARISON_URL", "http://localhost:3005").rstrip("/"),
+    "step_guide": os.getenv("SATELLITE_SITE_STEP_GUIDE_URL", "http://localhost:3006").rstrip("/"),
 }
-# Shared secret the satellite sites send as X-Signalor-Site-Key to read posts.
-SIGNALOR_SITE_KEY = os.getenv("SIGNALOR_SITE_KEY", "")
+# Shared blog DB (Signalor writes BlogPost rows; the satellite sites read it).
+# The "blog" connection is added per-env (development/production/staging) where
+# DATABASES is defined. Router sends the BlogPost model to it.
+BLOG_DATABASE_URL = os.getenv("BLOG_DATABASE_URL", "")
+DATABASE_ROUTERS = ["config.db_router.BlogRouter"]
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
