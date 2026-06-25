@@ -5601,6 +5601,7 @@ class BlogPublishNetworkView(APIView):
 
     def post(self, request, slug):
         from django.conf import settings as dj_settings
+        from django.shortcuts import get_object_or_404
         from django.utils import timezone
 
         from .models import SatelliteBlogPost
@@ -5670,6 +5671,7 @@ class OurBacklinksView(APIView):
 
     def get(self, request, slug):
         from django.conf import settings as dj_settings
+        from django.shortcuts import get_object_or_404
 
         from .models import SatelliteBlogPost
 
