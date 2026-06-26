@@ -5838,6 +5838,18 @@ class BlogGenerateView(APIView):
         slug_val = _slugify(forced_title) if forced_title else draft.get("slug", "")
         content_html = _to_html_from_markdownish(draft.get("content_markdown") or "")
 
+        # Guarantee at least one backlink to the brand site in the content.
+        if site_url:
+            from .pipeline.citations import host_of
+
+            brand_host = host_of(site_url)
+            if brand_host and brand_host not in content_html:
+                brand_name = getattr(run, "brand_name", "") or brand_host
+                content_html += (
+                    f'\n<p>Learn more about {brand_name} at '
+                    f'<a href="{site_url}">{site_url}</a>.</p>'
+                )
+
         # Always provide an AI description: meta -> excerpt -> derived from body.
         meta = (draft.get("meta_description") or draft.get("excerpt") or "").strip()
         if not meta:
