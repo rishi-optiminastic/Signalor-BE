@@ -316,6 +316,24 @@ def _resolve_blog_integration(email: str):
     return None, "none"
 
 
+def _short_title(text: str, max_words: int = 16) -> str:
+    """Clean + clamp a blog title to a short headline (default ≤16 words).
+
+    Strips trailing "Guide for <domain>" / "for <domain>" boilerplate and any
+    leading lowercase angle phrasing, then trims to max_words.
+    """
+    import re as _re
+
+    t = " ".join(str(text or "").split())
+    # Drop trailing "... Guide for example.com" / "... for example.com"
+    t = _re.sub(r"\s+(?:guide\s+)?for\s+[\w.-]+\.[a-z]{2,}\s*$", "", t, flags=_re.I)
+    t = t.strip(" -–—:") or "Untitled"
+    words = t.split()
+    if len(words) > max_words:
+        t = " ".join(words[:max_words]).rstrip(" ,.;:") + "…"
+    return t[0].upper() + t[1:] if t else t
+
+
 def _generate_blog_draft(
     site_url: str,
     topic: str,
@@ -364,7 +382,8 @@ Return STRICT JSON only with keys:
 title, slug, meta_description, excerpt, content_markdown, tags
 
 Requirements:
-- title: compelling and specific
+- title: a punchy headline, MAX 12 words. Do NOT restate the prompt verbatim and
+  do NOT append the site name or "Guide for ...".
 - slug: URL-safe
 - meta_description: max 160 chars
 - excerpt: 2-3 sentences
@@ -388,7 +407,7 @@ Requirements:
     )
 
     parsed = _extract_blog_json(raw) or {}
-    title = str(parsed.get("title") or f"{topic} Guide for {urlparse(site_url).netloc}").strip()
+    title = _short_title(parsed.get("title") or topic or urlparse(site_url).netloc)
     slug = _slugify(str(parsed.get("slug") or title))
     meta_description = str(parsed.get("meta_description") or "")[:160].strip()
     excerpt = str(parsed.get("excerpt") or "").strip()
@@ -5834,7 +5853,7 @@ class BlogGenerateView(APIView):
         draft = _generate_blog_draft(
             site_url, topic, keywords, recommendations, length=length, sources=sources
         )
-        title = forced_title or draft.get("title", "")
+        title = forced_title or _short_title(draft.get("title", ""))
         slug_val = _slugify(forced_title) if forced_title else draft.get("slug", "")
         content_html = _to_html_from_markdownish(draft.get("content_markdown") or "")
 
@@ -6063,7 +6082,7 @@ class BlogAutoPublishAllView(APIView):
                 draft = _generate_blog_draft(
                     site_url, angle, [], recommendations, length="short", sources=sources
                 )
-                title = (draft.get("title") or f"{brand}: {subject}").strip()[:300]
+                title = _short_title(draft.get("title") or f"{brand}: {subject}")[:300]
                 content_html = _to_html_from_markdownish(draft.get("content_markdown") or "")
                 if brand_host and ref_url and brand_host not in content_html:
                     content_html += (
