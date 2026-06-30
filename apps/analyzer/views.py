@@ -6200,3 +6200,55 @@ class BlogAutoPublishAllView(APIView):
             {"created": created, "errors": errors, "can_add_today": _auto_can_add_today(run)},
             status=status.HTTP_201_CREATED,
         )
+
+
+def _normalize_site(raw: str) -> str:
+    """Accept either a BlogPost.site value (market_trends) or its S3 folder
+    name (market-trends) and return the canonical site value."""
+    from . import blog_store
+
+    folder_to_site = {v: k for k, v in blog_store.SITE_FOLDERS.items()}
+    return folder_to_site.get(raw, raw)
+
+
+class PublicBlogListView(APIView):
+    """GET /public/blog/<site>/ — public, read-only list of published posts for one
+    satellite site. The 5 sites fetch this (no auth, no brand scope); the backend
+    reads S3 with creds so the bucket can stay private."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, site):
+        from . import blog_store
+
+        site = _normalize_site(site)
+        try:
+            rows = [
+                p
+                for p in blog_store.list_index(site)
+                if (p.get("status") or "published") == "published"
+            ]
+        except Exception as exc:
+            logger.warning("public-blog-list: S3 read failed for %s: %s", site, exc)
+            rows = []
+        return Response(rows)
+
+
+class PublicBlogDetailView(APIView):
+    """GET /public/blog/<site>/<post_slug>/ — public, read-only full post (incl.
+    content_html) for one satellite site."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, site, post_slug):
+        from . import blog_store
+
+        site = _normalize_site(site)
+        try:
+            post = blog_store.get_post(site, post_slug)
+        except Exception as exc:
+            logger.warning("public-blog-detail: S3 read failed for %s/%s: %s", site, post_slug, exc)
+            post = None
+        if not post or (post.get("status") and post["status"] != "published"):
+            return Response({"error": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(post)

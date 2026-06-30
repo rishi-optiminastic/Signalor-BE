@@ -11,6 +11,8 @@ from .views import (
     BlogSourcesView,
     BlogTitleIdeasView,
     OurBacklinksView,
+    PublicBlogDetailView,
+    PublicBlogListView,
     # Sitemap audit
     AgentLogView,
     AiChatView,
@@ -187,6 +189,13 @@ urlpatterns = [
     # Backlink marketplace
     path("runs/s/<str:slug>/backlinks/free/", RunBacklinkFreeView.as_view(), name="backlink-free"),
     path("runs/s/<str:slug>/backlinks/our/", OurBacklinksView.as_view(), name="backlink-our"),
+    # Public blog feed for the satellite sites (read-only, no auth; proxies S3).
+    path("public/blog/<str:site>/", PublicBlogListView.as_view(), name="public-blog-list"),
+    path(
+        "public/blog/<str:site>/<str:post_slug>/",
+        PublicBlogDetailView.as_view(),
+        name="public-blog-detail",
+    ),
     path(
         "runs/s/<str:slug>/blog/generate/",
         BlogGenerateView.as_view(),
